@@ -203,7 +203,35 @@ started normally (`Harmony Remote 0-3.4.0`, firmware 3.4 type 0), all
 buttons worked, and `flashapp check` matched the image.
 
 This is the complete update path, with known-good code: safe mode, erase,
-write, verify, normal boot. (The first `write` attempt failed at
+write, verify, normal boot.
+
+### First modified image (done)
+
+`tools/patchstr.py` replaced the four built-in "USB connected" strings
+with "open-harmony" (58 bytes changed: 56 text bytes and the checksum).
+Written in safe mode with `flashapp`, the image booted normally and
+`flashapp check` matched it. So a modified image with a recomputed
+checksum is accepted and runs.
+
+The screen did **not** change: when USB is plugged in it still shows
+"USB-Verbindung hergestellt". That text is in none of the dumps as ASCII,
+UTF-16, single-byte XOR or shifted text, so it comes from the
+configuration (generated in the user's language by Logitech's software),
+stored in some other form (compressed or pre-rendered).
+
+The built-in strings are a fallback. They sit behind a table of 3-byte
+pointers at 0x2E982 (order: English, French, Spanish, German):
+
+| Table | Messages |
+|---|---|
+| 0x2E982 | "Hello" / "Bonjour" / "Buenos Dias" / "Guten Tag" |
+| 0x2E98E | "USB Connected" / "USB a Connecte" / "USB Connecto" / "USB Hat Verbunden" |
+| 0x2E9AA | "System Error" / "Message D Erreur" / "Error Inesperado" / "Unerwarteter Fehler" |
+
+They are read by 0x2088A, which picks one of four messages from flags in
+RAM 0x2B3 (set from 0x2B4 by 0x20858/0x20862) and the language from
+0x2B5. 0x2088A has no direct callers (it is probably reached through a
+function pointer), so when the fallback is used is still open. (The first `write` attempt failed at
 `get_identity` right after the remote enumerated; a retry a few seconds
 later worked.)
 
