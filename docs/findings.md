@@ -233,6 +233,24 @@ RAM 0x2B3 (set from 0x2B4 by 0x20858/0x20862) and the language from
 0x2B5. 0x2088A has no direct callers (it is probably reached through a
 function pointer), so when the fallback is used is still open.
 
+## Display
+
+A 176x220 RGB565 LCD behind the I/O chip:
+
+- Pixel data port: bus address **0x020029**, written with `TBLWT *`
+  (TBLPTR fixed), high byte first.
+- 0x20E96 sets the row window (RAM 0x6CF start, 0x6D0 end), 0x20F84 the
+  column window (0x6D1 start, 0x6D2 end), 0x2105C starts the pixel write.
+- 0x229D0 is an unused factory test pattern: full window (rows 0-219,
+  columns 0-175), each row 58 px red `F800`, 60 px green `07E0`, 58 px blue
+  `001F`. 0x22A64 and 0x22C40 are further unused full-screen patterns.
+- `main` (0x28A0E) runs its initialisation calls and then, at 0x28A42,
+  calls 0x2112C, which fills the whole screen and does more after that;
+  `main` keeps its result (W) in RAM 0xD84.
+
+[`mods/colorbars`](../mods/colorbars) hooks that call to show the test
+pattern at boot.
+
 ## Configuration format (first look)
 
 `concordance --dump-config` writes an XML header followed by the raw
