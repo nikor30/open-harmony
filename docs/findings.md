@@ -110,9 +110,15 @@ Internal flash vectors:
 So the base firmware in internal flash always runs first. At 0x54C0 it
 decides whether to start the application:
 
-1. 0x934C returns a code; if it is 0x25, 0x1C or 0x1E the application is
-   **not** started. Probably a key scan: holding certain buttons at power-on
-   keeps the remote in the base firmware. Which buttons is untested.
+0. 0x498C probes the I/O chip (0x020024 must read neither 0x00 nor 0xFF) and
+   initialises it; if that fails the application is not started.
+1. 0x934C scans the key matrix: it drives lines through 0x020020 (active
+   low, binary search over 8 lines) and reads the return lines at 0x020021
+   (first clear bit). Code = 8 x drive line + read line + 1 (lines 0-based),
+   0 = no key. If the code is 0x25 (drive 4 / read 4), 0x1C (3/3) or 0x1E
+   (3/5) the application is **not** started. This matches Logitech's
+   "Safe Mode" on other Harmony models (hold Off while inserting the
+   battery); which physical buttons the three positions are is not yet known.
 2. 0x5814 recomputes the checksum over the image at 0x020000 and compares it
    with the stored one; only if they match does the code write `0x02:00:0A`
    to `PCLATU`/`PCLATH`/`PCL`, i.e. jump to the application entry.
