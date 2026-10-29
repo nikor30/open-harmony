@@ -61,21 +61,52 @@ larger than its 4 MiB buffer before any data is transferred.
 
 The connection stayed up after every attempt.
 
-## Firmware: QNX Neutrino on a PXA270
+## Firmware: QNX Neutrino 6.3.2 on a Freescale i.MX21
 
-Region 2 (application) is a QNX Neutrino boot image:
+Region 2 (application) is a QNX Neutrino boot image for a Logitech board
+called "Ethanol". [`tools/qnxifs.py`](../tools/qnxifs.py) decompresses it
+(UCL/NRV2B blocks) and unpacks the image file system (198 entries):
 
-- Header magic `ETHANOL`; strings `LogitechEthanol` and `startup-ethanol`
-  (the QNX startup program for a board Logitech called "Ethanol").
-- `imagefs` (QNX image file system) and QNX startup output such as
-  `syspage ptr`, `cpupage ptr`, `callout`.
-- `pxa270`: an Intel/Marvell PXA270 (XScale, ARM) CPU.
-- NAND flash besides the 2 MiB NOR (`Error in Accessing NAND - Page`,
-  `ECC Error Unrecoverable`), and an IPL that picks between images
+- Boot banner: `Welcome to Logitech Ethanol -- QNX Neutrino 6.3.2`.
+- CPU: Freescale **i.MX21** (ARM926, ARMv5 little-endian). Named by the
+  drivers `i2c-imx21`, `devg-imx21_logitech`, `devi-imx21s` and the graphics
+  config `drivername=imx21_logitech`. (The `pxa270` string in the raw dump
+  is just one entry in the startup code's SoC name table, not this board.)
+- Also NAND flash (`Error in Accessing NAND - Page`, `ECC Error
+  Unrecoverable`) and an IPL that selects an image
   (`IPL: 0x%X, Safe: 0x%X, Normal: 0x%X`).
-- Mostly compressed (about 7.8 bits/byte throughout).
 
 Region 1 (safe mode) is the **same image**: the two dumps differ only in
-header byte 22 (the region number, 1 or 2) and byte 62 (a header checksum
-that differs by the same 1). The remote keeps a complete second copy of
-its firmware as a fallback.
+header byte 22 (the region number, 1 vs 2) and byte 62 (a header checksum,
+off by the same 1). The remote keeps a full second copy as a fallback.
+
+### What runs
+
+`/proc/boot/.script` starts procnto, the serial driver, mounts the ETFS
+(NAND) regions, then runs `/etc/rc.d/rc.sysinit`, which chains
+`rc.network`, `rc.platform`, `rc.application`:
+
+- **Networking**: `io-net -dusbdnet -ptcpip -ppppmgr` (the USB-network
+  link to the PC), `inetd`, and `ethanol-usbd` (the config protocol on
+  TCP 3074). `inetd.conf` also offers ftp/telnet, and `qconn` (the QNX
+  remote-debug agent) starts on port 8000 if `/fs/etfs/scratch/qconnboot`
+  exists.
+- **Platform**: `psrv`, power (`tps65800`), `tilt`, `irgen` (IR blaster),
+  `ircap` (IR learning), per-variant Z-Wave (`rfgen-zw`) and audio.
+- **UI**: an **Adobe Flash Lite** player (`flash.sh -f flashlite-565.so
+  /usr/local/app/main.swf`). The actual interface, `main.swf`, lives on
+  the ETFS/NAND (`/usr/local/app`), not in this boot image.
+
+### Hardware variants
+
+`display.conf` and `rc.platform` select between three product variants by a
+display/board id: **cognac** and **hennessy** are 320x240 landscape;
+**vodka** is 240x320 portrait and is the Harmony 900. All RGB565. The
+image carries Logitech logo JPEGs per variant.
+
+### Credentials
+
+The image contains `/etc/passwd`, `/etc/shadow` and `/etc/ftpusers`. Their
+contents are deliberately **not** reproduced here or extracted; only their
+presence is noted. Anyone studying the login/telnet/ftp surface should do
+so on their own unit.

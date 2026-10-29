@@ -6,3 +6,5 @@ CLAUDE.local.md
 *.EZHex
 *.bin
 __pycache__/
+# Harmony 900 firmware dumps and extracted QNX filesystem (Logitech code, credentials)
+backup/h900/
