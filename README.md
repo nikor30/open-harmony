@@ -64,6 +64,23 @@ g++ -O2 -o local/bin/flashtest tools/flashtest.cpp -Ilocal/include \
 local/bin/flashtest
 ```
 
+`tools/flashapp.cpp` checks or writes an application image at 0x020000.
+It validates the header (magic, length, checksum) first, so the base
+firmware will accept the image; `write` only runs in safe mode and saves the
+current sector to `sector-0x020000-<time>.bin` before erasing:
+
+```bash
+g++ -O2 -o local/bin/flashapp tools/flashapp.cpp -Ilocal/include \
+    -Llocal/lib -Wl,-rpath,$PWD/local/lib -lconcord
+# the stock image, cut from your own dump
+head -c $((0x2EA92)) flash-256k.bin | tail -c +$((0x20001)) > app-3.4.bin
+local/bin/flashapp check app-3.4.bin   # read-only
+local/bin/flashapp write app-3.4.bin   # safe mode only
+```
+
+If an image does not start, hold Off while inserting the battery to get
+back to safe mode and write a working one.
+
 The PIC's internal flash (lower 64 KiB, the base firmware) can be read the
 same way:
 

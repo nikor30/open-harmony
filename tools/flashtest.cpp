@@ -4,7 +4,7 @@
  *
  * Needs libconcord built with patches/libconcord-dump-size-env.patch, which
  * adds lc_raw_read/lc_raw_erase_sector/lc_raw_write. Those refuse every
- * address outside flash 0x030000-0x03FFFF.
+ * address outside flash 0x020000-0x03FFFF; this tool only uses 0x030000.
  *
  * Steps: check identity (Harmony One, arch 12, AT49BV322A, safe mode),
  * check the block is empty, erase, write a pattern, verify, erase, verify.
