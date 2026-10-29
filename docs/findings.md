@@ -147,10 +147,40 @@ serves `READ_FLASH` with the same addressing. Leave safe mode by removing
 and reinserting the battery without holding a key.
 
 This makes safe mode the recovery path: the base firmware (3.2) lives in
-internal flash, answers USB and does not run the application. Whether its
-erase/write commands behave like the application's is not tested yet. It
-is also the natural place to rewrite 0x020000, because the code being
-replaced is not running.
+internal flash, answers USB and does not run the application. It is also
+the natural place to rewrite 0x020000, because the code being replaced is
+not running.
+
+### Safe mode USB commands (from the disassembly)
+
+The dispatcher at 0x6BB2 handles six commands; there is no IR capture:
+
+| Command | Handler |
+|---|---|
+| `B0` READ_MISC | 0x6DD6 |
+| `A0` WRITE_MISC | 0x6D0A |
+| `D0` ERASE_FLASH | 0x6C72 |
+| `50` READ_FLASH | 0x6C28 |
+| `30` WRITE_FLASH | 0x6BDE |
+| `10` GET_VERSION | 0x6BD0 |
+
+- The address check at 0x6AA0 is the same as the application's:
+  0x000000-0x3FFFFF external flash, 0xFE0000-0xFEFFF8 internal flash.
+- External erase uses the same bank latch (0x020025, `H - 3`) and window
+  (0x13xxxx), but the base firmware's own routine at 0xA34C, not the
+  0x1E00C table.
+- Internal erase (0xA83C) only checks a guard flag (RAM 0x110 bit 4, set by
+  the USB handler; otherwise `RESET`) against stray jumps. There is **no
+  address protection**: over USB, safe mode erases its own code at
+  0xFE0000+ just as willingly as the application does.
+- Safe mode never enables interrupts. Its enable routine (0xAD68) has no
+  callers; flash operations only save and restore the (off) state. So the
+  application's interrupt vectors at 0x020400/0x020800 are never used in
+  safe mode, and a broken application cannot crash it. (No indirect calls
+  were checked.)
+
+Holding Off is checked before the application's checksum, so even a
+corrupt application with a valid checksum cannot lock out safe mode.
 
 ## Flash driver (internal flash, 0x1E00C-0x1E014)
 
@@ -259,9 +289,9 @@ remote:
 
 ## Next steps
 
-1. Read the base firmware's USB command handlers (it is version 3.2 with
-   firmware type 4) to see how it erases and writes 0x020000, and whether it
-   also accepts 0xFExxxx.
+1. Test the write path in safe mode where nothing depends on it: erase the
+   empty 64 KiB block at flash 0x030000, write a test pattern, read it back,
+   erase it again. Needs a small write tool on top of libconcord.
 2. Open the remote, confirm the PIC18F87J50 marking, and find the ICSP pads
    (MCLR, PGC, PGD, VDD, GND). With a PICkit the whole internal flash,
    including 0x10000-0x1FFFF, can be backed up and restored.
