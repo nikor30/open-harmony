@@ -1,5 +1,5 @@
 diff --git a/libconcord/libconcord.cpp b/libconcord/libconcord.cpp
-index 4e4e01d..c423d25 100644
+index 4e4e01d..6c9fabc 100644
 --- a/libconcord/libconcord.cpp
 +++ b/libconcord/libconcord.cpp
 @@ -1471,7 +1471,20 @@ int read_firmware_from_remote(uint8_t **out, uint32_t *size, lc_callback cb,
@@ -24,7 +24,7 @@ index 4e4e01d..c423d25 100644
          cb_arg, LC_CB_STAGE_READ_FIRMWARE);
  }
  
-@@ -2014,3 +2027,65 @@ void report_net_error(const char *msg)
+@@ -2014,3 +2027,90 @@ void report_net_error(const char *msg)
      debug("Net error: %s failed with error %s", msg, strerror(errno));
  #endif
  }
@@ -90,11 +90,103 @@ index 4e4e01d..c423d25 100644
 +    lc_z_read_max = UINT32_MAX;
 +    return err;
 +}
++
++/*
++ * local hack (open-harmony): write one region of a usbnet (Z) remote with
++ * the same START/HEADER/DATA/DONE/CHECKSUM/FINISH sequence as a config
++ * update. Only region 12 (platform, a ZIP) is allowed.
++ */
++extern uint8_t lc_z_update_region;
++
++static void lc_z_no_progress(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
++                             void *, const uint32_t *)
++{
++}
++
++extern "C" int lc_z_write_region(uint8_t region, const uint8_t *data,
++                                 uint32_t len)
++{
++    if (!rmt || !rmt->IsZRemote() || !data || len == 0 || region != 12) {
++        return LC_ERROR;
++    }
++    lc_z_update_region = region;
++    int err = rmt->UpdateConfig(len, data, lc_z_no_progress, NULL, 0, 0,
++                                NULL);
++    lc_z_update_region = REGION_USER_CONFIG;
++    return err;
++}
 diff --git a/libconcord/remote_z.cpp b/libconcord/remote_z.cpp
-index d52843a..8edeed7 100644
+index d52843a..c5a43ff 100644
 --- a/libconcord/remote_z.cpp
 +++ b/libconcord/remote_z.cpp
-@@ -883,6 +883,13 @@ int CRemoteZ_USBNET::ReadIrStream(uint32_t *freq, uint32_t **ir_signal,
+@@ -383,6 +383,12 @@ int CRemoteZ_USBNET::TCPSendAndCheck(uint8_t cmd, uint32_t len, uint8_t *data)
+     return 0;
+ }
+ 
++/*
++ * local hack (open-harmony): region written by UpdateConfig. Normally the
++ * user config; lc_z_write_region() sets it for one call.
++ */
++uint8_t lc_z_update_region = REGION_USER_CONFIG;
++
+ int CRemoteZ_USBNET::UpdateConfig(const uint32_t len, const uint8_t *wr,
+                                   lc_callback cb, void *cb_arg,
+                                   uint32_t cb_stage, uint32_t xml_size,
+@@ -398,7 +404,7 @@ int CRemoteZ_USBNET::UpdateConfig(const uint32_t len, const uint8_t *wr,
+     debug("START_UPDATE");
+     // 2 parameters, each 1 byte.
+     // 1st parameter "flags" seems to always be 0.
+-    uint8_t cmd[60] = { 0x02, 0x01, 0x00, 0x01, REGION_USER_CONFIG };
++    uint8_t cmd[60] = { 0x02, 0x01, 0x00, 0x01, lc_z_update_region };
+     if ((err = TCPSendAndCheck(COMMAND_START_UPDATE, 5, cmd))) {
+         return err;
+     }
+@@ -415,7 +421,7 @@ int CRemoteZ_USBNET::UpdateConfig(const uint32_t len, const uint8_t *wr,
+     cmd[4] = (len & 0x0000FF00) >> 8;
+     cmd[5] = (len & 0x000000FF);
+     cmd[6] = 0x01; // 2nd parameter 1 byte (region id)
+-    cmd[7] = REGION_USER_CONFIG;
++    cmd[7] = lc_z_update_region;
+     if ((err = TCPSendAndCheck(COMMAND_WRITE_UPDATE_HEADER, 8, cmd))) {
+         return err;
+     }
+@@ -432,7 +438,7 @@ int CRemoteZ_USBNET::UpdateConfig(const uint32_t len, const uint8_t *wr,
+     uint8_t tmp_pkt[1033];
+     tmp_pkt[0] = 0x03; // 3 parameters
+     tmp_pkt[1] = 0x01; // 1st parameter, 1 byte (region id)
+-    tmp_pkt[2] = REGION_USER_CONFIG;
++    tmp_pkt[2] = lc_z_update_region;
+     tmp_pkt[3] = 0xC2; // 2nd parameter, 1024 bytes (data)
+     tmp_pkt[1028] = 0x04; // 3rd parameter, 4 bytes (length)
+     while (tlen) {
+@@ -470,7 +476,7 @@ int CRemoteZ_USBNET::UpdateConfig(const uint32_t len, const uint8_t *wr,
+     debug("UPDATE_DATA_DONE");
+     cmd[0] = 0x01; // 1 parameter
+     cmd[1] = 0x01; // 1st parameter 1 byte (region id)
+-    cmd[2] = REGION_USER_CONFIG;
++    cmd[2] = lc_z_update_region;
+     if ((err = TCPSendAndCheck(COMMAND_WRITE_UPDATE_DATA_DONE, 3, cmd))) {
+         return err;
+     }
+@@ -485,7 +491,7 @@ int CRemoteZ_USBNET::UpdateConfig(const uint32_t len, const uint8_t *wr,
+     cmd[2] = 0xFF; // seed seems to always be FF
+     cmd[3] = 0xFF; // seed seems to always be FF
+     cmd[4] = 0x01; // 2nd parameter 1 byte (region id)
+-    cmd[5] = REGION_USER_CONFIG;
++    cmd[5] = lc_z_update_region;
+     if ((err = TCPSendAndCheck(COMMAND_GET_UPDATE_CHECKSUM, 6, cmd))) {
+         return err;
+     }
+@@ -499,7 +505,7 @@ int CRemoteZ_USBNET::UpdateConfig(const uint32_t len, const uint8_t *wr,
+     cmd[1] = 0x01; // 1st parameter 1 byte (validate)
+     cmd[2] = 0x01; // validate?
+     cmd[3] = 0x01; // 2nd parameter 1 byte (region id)
+-    cmd[4] = REGION_USER_CONFIG;
++    cmd[4] = lc_z_update_region;
+     if ((err = TCPSendAndCheck(COMMAND_FINISH_UPDATE, 5, cmd))) {
+         return err;
+     }
+@@ -883,6 +889,13 @@ int CRemoteZ_USBNET::ReadIrStream(uint32_t *freq, uint32_t **ir_signal,
      return 0;
  }
  
@@ -108,7 +200,7 @@ index d52843a..8edeed7 100644
  int CRemoteZ_USBNET::ReadRegion(uint8_t region, uint32_t &rgn_len, uint8_t *rd,
                                  lc_callback cb, void *cb_arg, uint32_t cb_stage)
  {
-@@ -911,6 +918,12 @@ int CRemoteZ_USBNET::ReadRegion(uint8_t region, uint32_t &rgn_len, uint8_t *rd,
+@@ -911,6 +924,12 @@ int CRemoteZ_USBNET::ReadRegion(uint8_t region, uint32_t &rgn_len, uint8_t *rd,
      }
      ParseParams(rlen, rsp, pl);
      rgn_len = GetWord32(pl.p[0]);
@@ -121,7 +213,7 @@ index d52843a..8edeed7 100644
  
      debug("READ_REGION_DATA");
      uint32_t pkt_len;
-@@ -1191,9 +1204,13 @@ int CRemoteZ_Base::GetIdentity(TRemoteInfo &ri, THIDINFO &hid, lc_callback cb,
+@@ -1191,9 +1210,13 @@ int CRemoteZ_Base::GetIdentity(TRemoteInfo &ri, THIDINFO &hid, lc_callback cb,
  
      // Get the "XMLUserRFSetting" - the usbnet remote appears to have a web
      // server running where the Windows driver grabs this data.
