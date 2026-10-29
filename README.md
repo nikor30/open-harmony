@@ -81,6 +81,16 @@ local/bin/flashapp write app-3.4.bin   # safe mode only
 If an image does not start, hold Off while inserting the battery to get
 back to safe mode and write a working one.
 
+`tools/patchstr.py` changes text in an image without moving anything and
+fixes the checksum, e.g. the "USB Connected" screen message in all four
+languages:
+
+```bash
+tools/patchstr.py app-3.4.bin app-patched.bin \
+  "USB Hat Verbunden=open-harmony" "USB Connecto=open-harmony" \
+  "USB a Connecte=open-harmony" "USB Connected=open-harmony"
+```
+
 The PIC's internal flash (lower 64 KiB, the base firmware) can be read the
 same way:
 

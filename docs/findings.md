@@ -194,6 +194,19 @@ normal mode, 4 in safe mode), not in the data.
 So the erase and write commands of the base firmware work on the external
 flash, and concordance's `EraseFlash`/`WriteFlash` drive them correctly.
 
+### Application round trip (done)
+
+In safe mode, `tools/flashapp.cpp` saved sector 0x020000, erased it, wrote
+the original 3.4 image (60050 bytes, cut from the dump) and verified the
+whole sector. After reinserting the battery without a key the remote
+started normally (`Harmony Remote 0-3.4.0`, firmware 3.4 type 0), all
+buttons worked, and `flashapp check` matched the image.
+
+This is the complete update path, with known-good code: safe mode, erase,
+write, verify, normal boot. (The first `write` attempt failed at
+`get_identity` right after the remote enumerated; a retry a few seconds
+later worked.)
+
 ## Flash driver (internal flash, 0x1E00C-0x1E014)
 
 Five one-word entries (each a branch). Parameters go in RAM 0x60-0x62
