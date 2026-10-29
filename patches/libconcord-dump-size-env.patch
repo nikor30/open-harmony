@@ -1,5 +1,5 @@
 diff --git a/libconcord/libconcord.cpp b/libconcord/libconcord.cpp
-index 4e4e01d..cae6e19 100644
+index 4e4e01d..c423d25 100644
 --- a/libconcord/libconcord.cpp
 +++ b/libconcord/libconcord.cpp
 @@ -1471,7 +1471,20 @@ int read_firmware_from_remote(uint8_t **out, uint32_t *size, lc_callback cb,
@@ -24,7 +24,7 @@ index 4e4e01d..cae6e19 100644
          cb_arg, LC_CB_STAGE_READ_FIRMWARE);
  }
  
-@@ -2014,3 +2027,41 @@ void report_net_error(const char *msg)
+@@ -2014,3 +2027,65 @@ void report_net_error(const char *msg)
      debug("Net error: %s failed with error %s", msg, strerror(errno));
  #endif
  }
@@ -66,3 +66,58 @@ index 4e4e01d..cae6e19 100644
 +    }
 +    return rmt->WriteFlash(addr, len, data, ri.protocol, NULL, NULL, 0);
 +}
++
++/*
++ * local hack (open-harmony): read one region of a usbnet (Z) remote such as
++ * the Harmony 900 into buf. Read-only; fails if the remote announces more
++ * than buf_len bytes.
++ */
++extern uint32_t lc_z_read_max;
++extern uint32_t lc_z_last_len;
++
++extern "C" int lc_z_read_region(uint8_t region, uint8_t *buf, uint32_t buf_len,
++                                uint32_t *len)
++{
++    if (!rmt || !rmt->IsZRemote() || !buf || !len) {
++        return LC_ERROR;
++    }
++    lc_z_read_max = buf_len;
++    lc_z_last_len = 0;
++    /* for Z remotes ReadFlash(addr) is ReadRegion(addr) */
++    int err = rmt->ReadFlash(region, buf_len, buf, ri.protocol, false, NULL,
++                             NULL, 0);
++    *len = lc_z_last_len;
++    lc_z_read_max = UINT32_MAX;
++    return err;
++}
+diff --git a/libconcord/remote_z.cpp b/libconcord/remote_z.cpp
+index d52843a..d39a4b6 100644
+--- a/libconcord/remote_z.cpp
++++ b/libconcord/remote_z.cpp
+@@ -883,6 +883,13 @@ int CRemoteZ_USBNET::ReadIrStream(uint32_t *freq, uint32_t **ir_signal,
+     return 0;
+ }
+ 
++/*
++ * local hack (open-harmony): upper bound for ReadRegion's output buffer,
++ * set by lc_z_read_region(); the remote announces the size itself.
++ */
++uint32_t lc_z_read_max = UINT32_MAX;
++uint32_t lc_z_last_len = 0;
++
+ int CRemoteZ_USBNET::ReadRegion(uint8_t region, uint32_t &rgn_len, uint8_t *rd,
+                                 lc_callback cb, void *cb_arg, uint32_t cb_stage)
+ {
+@@ -911,6 +918,12 @@ int CRemoteZ_USBNET::ReadRegion(uint8_t region, uint32_t &rgn_len, uint8_t *rd,
+     }
+     ParseParams(rlen, rsp, pl);
+     rgn_len = GetWord32(pl.p[0]);
++    lc_z_last_len = rgn_len;
++    if (rd && rgn_len > lc_z_read_max) {
++        debug("Region %d is %u bytes, buffer only %u", region, rgn_len,
++              lc_z_read_max);
++        return LC_ERROR;
++    }
+ 
+     debug("READ_REGION_DATA");
+     uint32_t pkt_len;

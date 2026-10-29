@@ -38,3 +38,44 @@ local/bin/concordance -i -v
 `tools/usbnet-dhcp.py` uses a raw packet socket, so it works even when the
 host firewall drops incoming DHCP (UFW does by default). All of this is
 undone when the remote is unplugged (the interface disappears).
+
+The remote also runs a small web server on port 80 (`Server: Slinger
+1.0`); `/` returns 404.
+
+## Regions
+
+The 900 is not addressed by flash address but by region number
+(`TRegion` in libconcord's `remote.h`). concordance's `ReadRegion` copies
+as many bytes as the remote announces, without a buffer limit, so
+[`tools/zregion.cpp`](../tools/zregion.cpp) reads one region per run through
+`lc_z_read_region()` from the libconcord patch, which refuses regions
+larger than its 4 MiB buffer before any data is transferred.
+
+| Region | Announced size | Result |
+|---|---|---|
+| 0 bootloader | 16384 | read refused by the remote |
+| 1 safe mode | 3359840 | read |
+| 2 application | 3359840 | read |
+| 3 embedding config | 13057999 | not read (larger than the buffer; probably not a real size) |
+| 4 user config | 51025 | read, identical to `concordance --dump-config` |
+
+The connection stayed up after every attempt.
+
+## Firmware: QNX Neutrino on a PXA270
+
+Region 2 (application) is a QNX Neutrino boot image:
+
+- Header magic `ETHANOL`; strings `LogitechEthanol` and `startup-ethanol`
+  (the QNX startup program for a board Logitech called "Ethanol").
+- `imagefs` (QNX image file system) and QNX startup output such as
+  `syspage ptr`, `cpupage ptr`, `callout`.
+- `pxa270`: an Intel/Marvell PXA270 (XScale, ARM) CPU.
+- NAND flash besides the 2 MiB NOR (`Error in Accessing NAND - Page`,
+  `ECC Error Unrecoverable`), and an IPL that picks between images
+  (`IPL: 0x%X, Safe: 0x%X, Normal: 0x%X`).
+- Mostly compressed (about 7.8 bits/byte throughout).
+
+Region 1 (safe mode) is the **same image**: the two dumps differ only in
+header byte 22 (the region number, 1 or 2) and byte 62 (a header checksum
+that differs by the same 1). The remote keeps a complete second copy of
+its firmware as a fallback.
