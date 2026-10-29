@@ -160,6 +160,36 @@ This makes the 900 a much easier modding target than the One: the logic is
 Lua source and the UI is a Flash file, both inside a ZIP that the remote's
 own update mechanism handles. Writing a region back has **not** been tried.
 
+### Lua modules (`share/lua/5.1/ethanol/`)
+
+| Module | Lines | Role |
+|---|---|---|
+| `HAO.lua` | 1228 | central dispatcher: UI events, action lists, inter-key delays |
+| `RFService.lua` | 1247 | RF receivers (extenders) and their database |
+| `SysService.lua` | 796 | backlight fade, sleep/wake, battery, HTTP to local services |
+| `IRQueue.lua` | 665 | IR send queue, device delays, look-ahead |
+| `Activity.lua`, `Device.lua`, `State.lua` | ~1400 | activities, devices, power/input state |
+| `HelpEngine.lua` | 503 | the Help button (resync devices) |
+| `Numeric.lua` | 274 | number entry |
+
+Backlight level and timeout in `SysService.lua` are overwritten from the
+user settings (`/system/backlightlevel`, timeout) at start and on change,
+so their defaults have no visible effect. The fade timing is a fixed
+constant; [`mods/h900-slowfade`](../mods/h900-slowfade) changes it.
+
+### Boot modes and recovery
+
+`/etc/rc.d/rc.normal` runs `rc.services` (`data_srv` from the NAND, web
+root `/usr/data`), `rc.platform` (drivers from the NAND), `rc.application`
+(the Flash UI), then `ltcp_repeater` and `link_proxy` (NAND).
+`/etc/rc.d/rc.safe` starts **nothing from the NAND**.
+
+Port 3074 is not an `inetd` service (`inetd.conf` only runs ftp, telnet
+and discard), so the program serving concordance most likely comes from
+region 12 in normal mode. Open question before any write to region 12:
+does safe mode still answer concordance? That decides whether a broken
+region 12 could be rewritten over USB.
+
 ### Hardware variants
 
 `display.conf` and `rc.platform` select between three product variants by a
