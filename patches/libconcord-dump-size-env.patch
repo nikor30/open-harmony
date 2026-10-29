@@ -1,16 +1,26 @@
 diff --git a/libconcord/libconcord.cpp b/libconcord/libconcord.cpp
-index 4e4e01d..afb5ccb 100644
+index 4e4e01d..3a21950 100644
 --- a/libconcord/libconcord.cpp
 +++ b/libconcord/libconcord.cpp
-@@ -1471,6 +1471,11 @@ int read_firmware_from_remote(uint8_t **out, uint32_t *size, lc_callback cb,
+@@ -1471,7 +1471,20 @@ int read_firmware_from_remote(uint8_t **out, uint32_t *size, lc_callback cb,
                                void *cb_arg)
  {
      *size = FIRMWARE_MAX_SIZE;
-+    /* local hack: allow a larger read-only dump, e.g. LC_FW_READ_SIZE=0x40000 */
+-    return _read_fw_from_remote(*out, *size, ri.arch->firmware_base, cb,
++    /*
++     * local hack: read-only dumps of other ranges, e.g. LC_FW_READ_SIZE=0x40000,
++     * or LC_FW_READ_ADDR=0xFE0000 for the Harmony One's internal PIC flash
++     */
++    uint32_t addr = ri.arch->firmware_base;
 +    const char *env_size = getenv("LC_FW_READ_SIZE");
 +    if (env_size) {
 +        *size = strtoul(env_size, NULL, 0);
 +    }
-     return _read_fw_from_remote(*out, *size, ri.arch->firmware_base, cb,
++    const char *env_addr = getenv("LC_FW_READ_ADDR");
++    if (env_addr) {
++        addr = strtoul(env_addr, NULL, 0);
++    }
++    return _read_fw_from_remote(*out, *size, addr, cb,
          cb_arg, LC_CB_STAGE_READ_FIRMWARE);
  }
+ 

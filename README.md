@@ -12,9 +12,11 @@ So far:
   (Atmel AT49BV322A, 4 MiB).
 - The CPU is almost certainly a Microchip **PIC18F87J50** (USB registers
   match, 128 KiB internal flash, external memory bus).
+- A base firmware in the PIC's internal flash runs first, checks the
+  application's checksum and only then starts it. It has its own USB stack,
+  which should make a bad application recoverable (untested).
 - The application (firmware 3.4, 60 KiB) runs in place from the external
-  flash at 0x20000. Its header and checksum are decoded; a bootloader stays
-  in the internal flash.
+  flash at 0x20000. Its header and checksum are decoded.
 
 No Logitech firmware or remote configuration is included in this repository.
 Dump your own.
@@ -50,9 +52,19 @@ gpdasm -p p18f87j50 app.hex > app.raw.asm
 ../tools/pic18fix.py app.raw.asm > app.asm   # decode branches, full 21-bit targets, labels
 ```
 
+The PIC's internal flash (lower 64 KiB, the base firmware) can be read the
+same way:
+
+```bash
+LC_FW_READ_ADDR=0xFE0000 LC_FW_READ_SIZE=0x10000 \
+  ../local/bin/concordance --dump-firmware internal-64k.EZHex
+```
+
 **Warning:** the stock firmware accepts erase and write commands for the
-whole external flash, including the running application at 0x020000. Do not
-erase or write there. See [`docs/findings.md`](docs/findings.md).
+whole external flash *and* the lower 64 KiB of the PIC's internal flash.
+Never erase or write 0xFE0000-0xFEFFFF (reset vector, hard brick) or
+0x020000-0x02FFFF (running application). See
+[Danger zones](docs/findings.md#danger-zones).
 
 ## License
 
