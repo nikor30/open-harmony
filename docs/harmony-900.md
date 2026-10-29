@@ -205,8 +205,25 @@ Holding Off while inserting the battery shows "Safe Mode". In safe mode:
 
 So safe mode starts only from the boot image (of which the remote keeps two
 copies), answers concordance and serves region 12. That is the recovery
-path for a failed region-12 write. Whether safe mode also **accepts**
-region writes has not been tried.
+path for a failed region-12 write.
+
+### Region 12 round trip (done)
+
+[`tools/zwrite.cpp`](../tools/zwrite.cpp) writes region 12 with the same
+command sequence concordance uses for config updates (`START_UPDATE`,
+`WRITE_UPDATE_HEADER`, `WRITE_UPDATE_DATA` in 1 KiB chunks,
+`WRITE_UPDATE_DATA_DONE`, `GET_UPDATE_CHECKSUM`, `FINISH_UPDATE`), with the
+region number changed. The libconcord patch only allows region 12; the tool
+requires safe mode and a ZIP that passes `unzip -t`, saves the current
+region first and reads it back afterwards.
+
+In safe mode the unchanged original region 12 (7 MB) was written in about
+2 minutes. Read back: all 556 files present with identical contents and all
+28 programs in `bin/` still executable; only 20 settings cache files in
+`cache/` came back as `0775` instead of `0600`/`0644` (normal mode wipes
+and rebuilds that directory at start). After reinserting the battery the
+remote started normally (firmware type 0, port 80 open, so `data_srv` from
+region 12 runs) and worked as before.
 
 To leave safe mode, reinsert the battery without holding a key.
 

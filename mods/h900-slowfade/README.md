@@ -19,6 +19,6 @@ The Lua thread sleeps during the fade, so input during those 1.5 s is
 handled a little later; this only happens while going to sleep.
 
 **Not written to a remote yet.** Region 12 has no second copy; safe mode
-reads it and answers concordance (tested), which is the recovery path, but
-writing a region has not been tried yet (see
+reads it and answers concordance, and writing the original region 12 back in
+safe mode worked and booted normally (see
 [`docs/harmony-900.md`](../../docs/harmony-900.md)).
