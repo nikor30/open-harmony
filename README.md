@@ -46,11 +46,13 @@ LC_FW_READ_SIZE=0x40000 ../local/bin/concordance --dump-firmware flash-256k.EZHe
 # disassemble the application (needs gputils)
 dd if=flash-256k.bin of=app.bin bs=1 skip=$((0x20000)) count=$((0x10000))
 ../tools/bin2ihex.py app.bin app.hex 0x20000
-gpdasm -p p18f87j50 app.hex > app.asm
+gpdasm -p p18f87j50 app.hex > app.raw.asm
+../tools/pic18fix.py app.raw.asm > app.asm   # decode branches, full 21-bit targets, labels
 ```
 
-gpdasm masks jump targets to the device's internal flash size, so
-`goto 0x00ea38` means 0x2EA38.
+**Warning:** the stock firmware accepts erase and write commands for the
+whole external flash, including the running application at 0x020000. Do not
+erase or write there. See [`docs/findings.md`](docs/findings.md).
 
 ## License
 

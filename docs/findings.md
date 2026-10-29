@@ -88,6 +88,54 @@ The J50 family with an external memory bus and 128 KiB internal flash
 (needed for the 0x20000 boundary and the 0x1E000 jump table) is the
 80-pin **PIC18F87J50**. To be confirmed by reading the chip marking.
 
+## Bootloader API (internal flash, 0x1E00C-0x1E014)
+
+Five one-word entries (each a branch into the bootloader). Parameters go in
+RAM 0x60-0x62 (24-bit address, low byte first) and 0x63-0x65 (data). The
+application wraps every call in 0x2E8F8 / 0x2E908, which save `INTCON.GIE`,
+disable interrupts and restore them afterwards.
+
+| Entry | Called from | Arguments | Likely function |
+|---|---|---|---|
+| 0x1E00C | 0x2DDCE, 0x2DDEC | address 0x022000 / 0x022002, result in 0x63 | read flash ID (results stored to 0xD54/0xD55; `1F`/`C8` = Atmel AT49BV322A) |
+| 0x1E00E | 0x2DEDA | address | erase sector |
+| 0x1E010 | 0x2DE92 | address, 1 data byte | program |
+| 0x1E012 | 0x2DEBC | address, 3 data bytes | program (wider) |
+| 0x1E014 | 0x2C8C2, 0x2CA24 | none, called in a loop with `CLRWDT` | probably sleep/idle |
+
+These routines have to run from internal flash: while the external chip is
+in ID, erase or program mode the CPU cannot fetch code from it.
+
+## USB command handling
+
+The command byte is in RAM 0xD1F. The dispatcher at 0x26492 switches on its
+high nibble: `B0` READ_MISC, `10` GET_VERSION, `70` START_IRCAP, `A0`
+WRITE_MISC, `D0` ERASE_FLASH (`D3`), `50` READ_FLASH, `30` WRITE_FLASH,
+matching concordance's `protocol.h`.
+
+`ERASE_FLASH` (0x2657A):
+
+1. Reads a 3-byte address, high byte first, into 0x287/0x286/0x285.
+2. Classifies it with 0x2637A:
+   - high byte 0x00-0x3F: external flash, type 0x00 (all 4 MiB);
+   - 0xFE0000-0xFEFFF8: memory type 0xFE, handled by 0x2E6B4;
+   - anything else: rejected.
+3. For external flash: writes `high - 3` with `TBLWT` to bus address
+   **0x020025** (inside the `DE AD` filler of the image header, so most
+   likely a memory-mapped bank latch), then erases through the bootloader
+   at window address `0x13:mid:low`.
+
+The 4 MiB chip is therefore not mapped linearly into the 2 MiB PIC18 address
+space; part of it is banked through the latch at 0x020025.
+
+**There is no guard for the application region.** An `ERASE_FLASH` for
+0x020000-0x02FFFF is accepted and would erase the code the CPU is running
+from. Never send erase or write commands in that range with concordance or
+your own tools until the bootloader's recovery behaviour is known.
+
+The relative branches in this section were decoded with
+[`tools/pic18fix.py`](../tools/pic18fix.py).
+
 ## What this means for custom firmware
 
 - The application is not hidden in the PIC; it sits in the external flash,
@@ -101,8 +149,9 @@ The J50 family with an external memory bus and 128 KiB internal flash
 
 ## Next steps
 
-1. Read the bootloader side: find how the application uses the 0x1E00C-0x1E014
-   entries, and the USB command handler / flash-write path in the image.
+1. Work out the bank latch at 0x020025: which latch value maps which part
+   of the 4 MiB into the window, and whether the window at 0x13xxxx can
+   reach the application region at all.
 2. Open the remote, confirm the PIC18F87J50 marking, and find the ICSP pads
    (MCLR, PGC, PGD, VDD, GND). A PICkit on ICSP gives a brick-proof way to
    back up and restore the internal flash, including the bootloader.
