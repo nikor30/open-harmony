@@ -97,6 +97,69 @@ off by the same 1). The remote keeps a full second copy as a fallback.
   /usr/local/app/main.swf`). The actual interface, `main.swf`, lives on
   the ETFS/NAND (`/usr/local/app`), not in this boot image.
 
+### Who talks to the PC
+
+- `ethanol-usbd` is only the USB network gadget (Belcarra USBLAN). On
+  connect it runs `/etc/net/usb/usbd_connect`: take the address from the
+  host or run `dhcp.client`, then start `mDNSResponder`.
+- `/etc/net/mdns_services` advertises **"Remote3"**, service
+  `_remotesrv._tcp` on **port 3074** (the port concordance uses), with
+  `UsbProductId=0xC11F`.
+- `/usr/local/sbin/update` is a QNX resource manager that serves the
+  regions listed in `/etc/regiontab`, with a cache under
+  `/var/run/update/cache` and `.version` files per region.
+- The program that actually listens on 3074 is not in the boot image; it
+  is on the NAND (see below).
+
+### Region table (`/etc/regiontab`)
+
+| # | Name | Kind | Where |
+|---|---|---|---|
+| 0 | ipl | flash | 0x000000, 16 KiB |
+| 1 | safe_mode | flash | 0x200000, 4 MiB |
+| 2 | normal_mode | flash | 0x600000, 8 MiB |
+| 3 | etfs_base | fs | the whole NAND file system |
+| 4 | config_base | fs | user configuration |
+| 6 | man_data | flash | 0x004000 |
+| 7 | zw_fw_dev | dev | Z-Wave radio firmware |
+| 11 | media_home | fs | `/usr/media` |
+| 12 | appl_home | fs | `/fs/etfs/platform` (Logitech programs, UI, Lua) |
+| 14 | ui_appl_home | fs | `/usr/flashlite` (Flash Lite player, fonts) |
+| 16 | ecnet_home | fs | `/usr/device/ecnet` |
+| 23 | preload | flash | 0xE00000, 32 MiB |
+
+"fs" regions are delivered as **ZIP archives** when read.
+
+## NAND software (regions 12 and 14)
+
+Read with `zregion` (limit raised to 32 MiB), both are ZIP archives dated
+2010-04-05:
+
+- **Region 12, platform** (7.0 MB ZIP, 607 files, 8.5 MB unpacked):
+  - `app/main.swf`, `app/app-main.swf` (1.5 MB, the Flash UI),
+    `app/oob-main.swf` (out-of-box setup), `vodkatest.swf`,
+    `message-fwsuccess.swf`, `message-badguid.swf`, and hundreds of PNG
+    assets per variant (even a leftover `.psd`).
+  - `app/RemoteStates.xml` and translation tables.
+  - Programs: `hao`, `sys_srv`, `data_srv`, `env_mgr`, `ir_mgr`, `irgen`,
+    `ircap`, `link_proxy`, `ltcp_repeater`, `ecnet_mgr`, `rfgen-zw`,
+    `rfgen-ecnet`, `notify_mgr`, `psrv`, `whyboot`, and a `lua`
+    interpreter.
+  - **Lua 5.1 with Logitech's logic as plain source**: 29 `.lua` files,
+    about 6,900 lines in `share/lua/5.1/ethanol/` (`HAO.lua`, `Activity.lua`,
+    `Device.lua`, `Infrared.lua`, `IRQueue.lua`, `Controller.lua`,
+    `BindingList.lua`, `RemoteInfo.lua`, `RFService.lua`, `HelpEngine.lua`,
+    ...), plus LuaSocket and LuaExpat.
+- **Region 14, flashlite** (3.5 MB ZIP, 53 files): Flash Lite players for
+  RGB565/555/8888, video and sound decoders, fonts (incl. CJK),
+  translations.
+- Region 14 failed once at the identity step right after the previous read
+  and worked on a retry a few seconds later.
+
+This makes the 900 a much easier modding target than the One: the logic is
+Lua source and the UI is a Flash file, both inside a ZIP that the remote's
+own update mechanism handles. Writing a region back has **not** been tried.
+
 ### Hardware variants
 
 `display.conf` and `rc.platform` select between three product variants by a

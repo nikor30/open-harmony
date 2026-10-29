@@ -25,7 +25,7 @@
 extern "C" int lc_z_read_region(uint8_t region, uint8_t *buf, uint32_t buf_len,
                                 uint32_t *len);
 
-static const uint32_t MAX_REGION = 4 * 1024 * 1024; /* the 900 has 2 MiB flash */
+static const uint32_t MAX_REGION = 32 * 1024 * 1024; /* NAND "preload" region size */
 
 /* get_identity calls its callback unconditionally */
 static void no_progress(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
