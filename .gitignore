@@ -1,0 +1,8 @@
+backup/
+local/
+src/
+identity.txt
+CLAUDE.local.md
+*.EZHex
+*.bin
+__pycache__/
