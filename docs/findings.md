@@ -40,28 +40,71 @@ external flash at address 0. With
 | 0x00000-0x01FFF | almost empty, a few `67`/`F7`/`6F` bytes at the start |
 | 0x02000-0x04FFF | data structures; `GSPM` at 0x2000 equals the arch 12 config cookie `0x4D505347` |
 | 0x05000-0x1FFFF | empty (0xFF) |
-| 0x20000-0x2BFFF | ~48 KiB **PIC18 program image** |
-| 0x2C000-0x3FFFF | rest of image, then empty |
+| 0x20000-0x2EA91 | 60050 bytes **PIC18 application image** (firmware 3.4) |
+| 0x2EA92-0x3FFFF | empty |
 
 ### The image at 0x20000
 
-- Offset 8 holds `48 47` ("HG"), the same magic concordance's
-  `_fix_magic_bytes()` writes into firmware images of older models.
-- Filler `DE AD` runs at 0x20020.
-- Of the 24576 16-bit words in 0x20000-0x2BFFF: 3337 `MOVLW` (`0Exx`),
-  2813 `MOVWF` (`6Exx`/`6Fxx`), 963 `CALL` (`ECxx`/`EDxx`), 105 `GOTO` (`EFxx`),
-  324 `RETURN` (`0012`/`0013`). ARM, MSP430 and AVR return opcodes do not occur.
+Opcode statistics over 0x20000-0x2BFFF (24576 words): 3337 `MOVLW` (`0Exx`),
+2813 `MOVWF` (`6Exx`/`6Fxx`), 963 `CALL` (`ECxx`/`EDxx`), 105 `GOTO` (`EFxx`),
+324 `RETURN` (`0012`/`0013`). ARM, MSP430 and AVR return opcodes do not occur.
+`gpdasm` turns it into coherent code.
 
-So the One most likely runs on a Microchip PIC18, and the external flash
-carries a copy of its program. Whether that copy is what the PIC executes
-from (unlikely for PIC18), a staging area for updates, or a backup is still
-open.
+**It executes in place.** All 1315 `CALL`/`GOTO` targets lie in
+0x20014-0x2EA8C, i.e. the code is linked for exactly the addresses it has in
+the external flash. A PIC18 can only do that through its external memory bus
+in extended microcontroller mode, where everything above the internal flash
+is fetched from the bus.
+
+The 7 remaining targets go to 0x1E00C-0x1E014, a jump table near the top of
+the internal 128 KiB flash: most likely the API of a bootloader that lives
+in the PIC itself.
+
+Header (little endian):
+
+| Offset | Value | Meaning |
+|---|---|---|
+| +0 | `CD D8` | checksum: XOR of byte pairs +4..end, seeded `21 43` (same algorithm as concordance's `_fix_magic_bytes()`) |
+| +2 | `FF FF` | unused |
+| +4 | `0xEA8A` | length after +8; 0x20008 + 0xEA8A = 0x2EA92 = end of image |
+| +6 | `00 34` | version 3.4 (matches `concordance -i`) |
+| +8 | `48 47` | "HG" magic |
+| +A | `GOTO 0x2EA38` | entry point |
+| +0x20 | `DE AD` x 8 | filler |
+
+## CPU: PIC18F87J50
+
+Special function registers (SFRs) used by the code, resolved with the
+gputils headers:
+
+- Heavy use of `TBLPTR`/`TABLAT` (table reads from flash), `FSR0`, `PORTC`.
+- USB registers, all at their PIC18F87J50 addresses: `UCON` (0xF65),
+  `UIR` (0xF62), `UIE` (0xF5C), `UEIE`, `UADDR` (0xF5E), `UCFG` (0xF5F),
+  `UEP0`-`UEP2` (0xF4C-0xF4E). On the J94 family these addresses are clock
+  and RTC registers; its USB block (`UCON` at 0xF75) is never touched.
+- Banked accesses to 0xF00-0xF3F, which is plain RAM on the J50.
+
+The J50 family with an external memory bus and 128 KiB internal flash
+(needed for the 0x20000 boundary and the 0x1E000 jump table) is the
+80-pin **PIC18F87J50**. To be confirmed by reading the chip marking.
+
+## What this means for custom firmware
+
+- The application is not hidden in the PIC; it sits in the external flash,
+  which concordance can already read over USB, and the header format is known.
+- A replacement application could be linked for 0x20000, given the same
+  header and checksum, and written to the external flash, leaving the
+  bootloader in the internal flash untouched.
+- Unknown: how the bootloader decides whether to start the application, and
+  whether it still offers USB recovery if the image is bad. Until that is
+  known, writing 0x20000 can brick the remote.
 
 ## Next steps
 
-1. Disassemble the image (`gpdasm -p 18f...`) and check it is coherent code;
-   find the USB command handler and the flash-write path.
-2. Open the remote and read the part number of the main chip; look for the
-   ICSP header (MCLR, PGC, PGD, VDD, GND) used for PIC programming.
-3. With the exact part known, an ICSP programmer (PICkit) gives a
-   brick-proof way to read and write the internal flash.
+1. Read the bootloader side: find how the application uses the 0x1E00C-0x1E014
+   entries, and the USB command handler / flash-write path in the image.
+2. Open the remote, confirm the PIC18F87J50 marking, and find the ICSP pads
+   (MCLR, PGC, PGD, VDD, GND). A PICkit on ICSP gives a brick-proof way to
+   back up and restore the internal flash, including the bootloader.
+3. Only then: build a minimal test image (e.g. toggle a backlight pin) and
+   flash it to 0x20000.

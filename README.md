@@ -10,8 +10,11 @@ So far:
 
 - concordance can read the identity, the config and the external flash
   (Atmel AT49BV322A, 4 MiB).
-- The external flash at 0x20000 holds a ~48 KiB PIC18 program image, so the
-  remote most likely runs on a Microchip PIC18.
+- The CPU is almost certainly a Microchip **PIC18F87J50** (USB registers
+  match, 128 KiB internal flash, external memory bus).
+- The application (firmware 3.4, 60 KiB) runs in place from the external
+  flash at 0x20000. Its header and checksum are decoded; a bootloader stays
+  in the internal flash.
 
 No Logitech firmware or remote configuration is included in this repository.
 Dump your own.
@@ -39,7 +42,15 @@ mkdir -p backup && cd backup
 LC_FW_READ_SIZE=0x40000 ../local/bin/concordance --dump-firmware flash-256k.EZHex
 ../tools/ezhex2bin.py flash-256k.EZHex flash-256k.bin
 ../tools/flashmap.py flash-256k.bin
+
+# disassemble the application (needs gputils)
+dd if=flash-256k.bin of=app.bin bs=1 skip=$((0x20000)) count=$((0x10000))
+../tools/bin2ihex.py app.bin app.hex 0x20000
+gpdasm -p p18f87j50 app.hex > app.asm
 ```
+
+gpdasm masks jump targets to the device's internal flash size, so
+`goto 0x00ea38` means 0x2EA38.
 
 ## License
 
