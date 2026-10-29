@@ -13,8 +13,10 @@ So far:
 - The CPU is almost certainly a Microchip **PIC18F87J50** (USB registers
   match, 128 KiB internal flash, external memory bus).
 - A base firmware in the PIC's internal flash runs first, checks the
-  application's checksum and only then starts it. It has its own USB stack,
-  which should make a bad application recoverable (untested).
+  application's checksum and only then starts it. Holding **Off** while
+  inserting the battery keeps the remote in this base firmware ("Safe
+  Mode", firmware 3.2), which still answers concordance and reads the
+  flash: a recovery path that needs no hardware.
 - The application (firmware 3.4, 60 KiB) runs in place from the external
   flash at 0x20000. Its header and checksum are decoded.
 

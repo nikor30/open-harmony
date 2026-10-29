@@ -129,9 +129,28 @@ is still open. A block at internal 0x6092 has its own startup code and calls
 0x0210F0-0x0211B6, so it was linked for another address (probably a staged
 module).
 
-The base firmware has its own USB stack (36 USB SFR accesses), so a remote
-with a bad application image most likely stays reachable over USB. This is
-the inferred recovery path; it has not been tested.
+### Safe mode (tested)
+
+Holding **Off** while inserting the battery shows "Safe Mode" on the
+screen; the remote then runs the base firmware only. Over USB:
+
+| | Normal | Safe mode |
+|---|---|---|
+| USB strings | `Harmony Remote 0-3.4.0` | `Harmony Remote 4-3.2.0` |
+| Firmware version | 3.4 | 3.2 |
+| Firmware type | 0 | 4 |
+| Everything else in `concordance -i -v` | | identical |
+
+A 256 KiB `--dump-firmware` of flash 0x000000-0x03FFFF in safe mode is
+byte-for-byte identical to the normal-mode dump, so the base firmware
+serves `READ_FLASH` with the same addressing. Leave safe mode by removing
+and reinserting the battery without holding a key.
+
+This makes safe mode the recovery path: the base firmware (3.2) lives in
+internal flash, answers USB and does not run the application. Whether its
+erase/write commands behave like the application's is not tested yet. It
+is also the natural place to rewrite 0x020000, because the code being
+replaced is not running.
 
 ## Flash driver (internal flash, 0x1E00C-0x1E014)
 
@@ -240,10 +259,9 @@ remote:
 
 ## Next steps
 
-1. Find out which buttons the key codes 0x25, 0x1C, 0x1E are, and check
-   whether holding them at power-on keeps the remote in the base firmware
-   (it should still answer `concordance -i`). That tests the recovery path
-   without writing anything.
+1. Read the base firmware's USB command handlers (it is version 3.2 with
+   firmware type 4) to see how it erases and writes 0x020000, and whether it
+   also accepts 0xFExxxx.
 2. Open the remote, confirm the PIC18F87J50 marking, and find the ICSP pads
    (MCLR, PGC, PGD, VDD, GND). With a PICkit the whole internal flash,
    including 0x10000-0x1FFFF, can be backed up and restored.
