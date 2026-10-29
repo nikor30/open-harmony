@@ -91,7 +91,7 @@ index 4e4e01d..c423d25 100644
 +    return err;
 +}
 diff --git a/libconcord/remote_z.cpp b/libconcord/remote_z.cpp
-index d52843a..d39a4b6 100644
+index d52843a..8edeed7 100644
 --- a/libconcord/remote_z.cpp
 +++ b/libconcord/remote_z.cpp
 @@ -883,6 +883,13 @@ int CRemoteZ_USBNET::ReadIrStream(uint32_t *freq, uint32_t **ir_signal,
@@ -121,3 +121,19 @@ index d52843a..d39a4b6 100644
  
      debug("READ_REGION_DATA");
      uint32_t pkt_len;
+@@ -1191,9 +1204,13 @@ int CRemoteZ_Base::GetIdentity(TRemoteInfo &ri, THIDINFO &hid, lc_callback cb,
+ 
+     // Get the "XMLUserRFSetting" - the usbnet remote appears to have a web
+     // server running where the Windows driver grabs this data.
++    /*
++     * local hack (open-harmony): in safe mode the remote's web server is not
++     * running; only web.cpp uses this value, so continue without it.
++     */
+     if ((err = GetXMLUserRFSetting(&ri.xml_user_rf_setting))) {
+-        debug("Failed to read XML User RF Settings");
+-        return LC_ERROR;
++        debug("Failed to read XML User RF Settings, continuing without");
++        ri.xml_user_rf_setting = strdup("");
+     }
+     
+     return 0;

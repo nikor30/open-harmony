@@ -185,10 +185,30 @@ root `/usr/data`), `rc.platform` (drivers from the NAND), `rc.application`
 `/etc/rc.d/rc.safe` starts **nothing from the NAND**.
 
 Port 3074 is not an `inetd` service (`inetd.conf` only runs ftp, telnet
-and discard), so the program serving concordance most likely comes from
-region 12 in normal mode. Open question before any write to region 12:
-does safe mode still answer concordance? That decides whether a broken
-region 12 could be rewritten over USB.
+and discard).
+
+### Safe mode (tested)
+
+Holding Off while inserting the battery shows "Safe Mode". In safe mode:
+
+- Port **3074 is open**, port 80 is closed (`data_srv`, the web server, is
+  only started by normal mode). So the protocol service comes from the boot
+  image, not from region 12.
+- Stock concordance fails to identify the remote here: `GetIdentity` ends
+  with an HTTP request to port 80 for "XMLUserRFSetting" and treats a
+  failure as fatal. That value is only used by `web.cpp` (Logitech's
+  website). The libconcord patch makes the step non-fatal (empty string).
+- With that, `concordance -i` reports the same remote with **firmware type
+  4** (normal mode: type 0), like the Harmony One's safe mode.
+- Region 12 read in safe mode has exactly the same contents as in normal
+  mode (556 files, none missing or different).
+
+So safe mode starts only from the boot image (of which the remote keeps two
+copies), answers concordance and serves region 12. That is the recovery
+path for a failed region-12 write. Whether safe mode also **accepts**
+region writes has not been tried.
+
+To leave safe mode, reinsert the battery without holding a key.
 
 ### Hardware variants
 

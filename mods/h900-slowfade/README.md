@@ -18,7 +18,7 @@ unzip -tqq region12-slowfade.zip                        # the remote's own first
 The Lua thread sleeps during the fade, so input during those 1.5 s is
 handled a little later; this only happens while going to sleep.
 
-**Not written to a remote yet.** Region 12 has no second copy, and the
-program serving port 3074 seems to come from region 12 in normal mode, so
-recovery over USB in safe mode has to be confirmed first (see
+**Not written to a remote yet.** Region 12 has no second copy; safe mode
+reads it and answers concordance (tested), which is the recovery path, but
+writing a region has not been tried yet (see
 [`docs/harmony-900.md`](../../docs/harmony-900.md)).
