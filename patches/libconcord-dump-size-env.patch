@@ -1,5 +1,5 @@
 diff --git a/libconcord/libconcord.cpp b/libconcord/libconcord.cpp
-index 4e4e01d..3a21950 100644
+index 4e4e01d..45c92f5 100644
 --- a/libconcord/libconcord.cpp
 +++ b/libconcord/libconcord.cpp
 @@ -1471,7 +1471,20 @@ int read_firmware_from_remote(uint8_t **out, uint32_t *size, lc_callback cb,
@@ -24,3 +24,45 @@ index 4e4e01d..3a21950 100644
          cb_arg, LC_CB_STAGE_READ_FIRMWARE);
  }
  
+@@ -2014,3 +2027,41 @@ void report_net_error(const char *msg)
+     debug("Net error: %s failed with error %s", msg, strerror(errno));
+ #endif
+ }
++
++/*
++ * local hack (open-harmony): raw flash access for write tests.
++ * Refuses every range outside [LC_RAW_MIN, LC_RAW_MAX), which on the
++ * Harmony One is an unused 64 KiB sector of the external flash.
++ */
++#define LC_RAW_MIN 0x030000
++#define LC_RAW_MAX 0x040000
++
++static int _lc_raw_allowed(uint32_t addr, uint32_t len)
++{
++    return len > 0 && addr >= LC_RAW_MIN && addr < LC_RAW_MAX &&
++           len <= LC_RAW_MAX - addr;
++}
++
++extern "C" int lc_raw_read(uint32_t addr, uint32_t len, uint8_t *out)
++{
++    if (!rmt || !_lc_raw_allowed(addr, len)) {
++        return LC_ERROR;
++    }
++    return rmt->ReadFlash(addr, len, out, ri.protocol, false, NULL, NULL, 0);
++}
++
++extern "C" int lc_raw_erase_sector(uint32_t addr)
++{
++    if (!rmt || !_lc_raw_allowed(addr, 0x10000) || (addr & 0xFFFF)) {
++        return LC_ERROR;
++    }
++    return rmt->EraseFlash(addr, 0x10000, ri, NULL, NULL, 0);
++}
++
++extern "C" int lc_raw_write(uint32_t addr, uint32_t len, const uint8_t *data)
++{
++    if (!rmt || !_lc_raw_allowed(addr, len)) {
++        return LC_ERROR;
++    }
++    return rmt->WriteFlash(addr, len, data, ri.protocol, NULL, NULL, 0);
++}

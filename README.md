@@ -54,6 +54,16 @@ gpdasm -p p18f87j50 app.hex > app.raw.asm
 ../tools/pic18fix.py app.raw.asm > app.asm   # decode branches, full 21-bit targets, labels
 ```
 
+To test the erase/write path, `tools/flashtest.cpp` erases, writes and
+verifies the unused flash block 0x030000-0x03FFFF. The patched libconcord
+refuses any other address, and the tool only runs in safe mode:
+
+```bash
+g++ -O2 -o local/bin/flashtest tools/flashtest.cpp -Ilocal/include \
+    -Llocal/lib -Wl,-rpath,$PWD/local/lib -lconcord
+local/bin/flashtest
+```
+
 The PIC's internal flash (lower 64 KiB, the base firmware) can be read the
 same way:
 
