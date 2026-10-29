@@ -182,6 +182,18 @@ The dispatcher at 0x6BB2 handles six commands; there is no IR capture:
 Holding Off is checked before the application's checksum, so even a
 corrupt application with a valid checksum cannot lock out safe mode.
 
+### Write test (done)
+
+`tools/flashtest.cpp` in safe mode on the unused block 0x030000-0x03FFFF:
+pre-check empty, erase, write a 64 KiB pattern, read back and compare,
+erase, check empty. All steps passed. Afterwards, flash 0x000000-0x03FFFF
+was byte-for-byte identical to the backup taken before the test, and the
+config dump differed only in the `<SOFTWARETYPE>` header field (0 in
+normal mode, 4 in safe mode), not in the data.
+
+So the erase and write commands of the base firmware work on the external
+flash, and concordance's `EraseFlash`/`WriteFlash` drive them correctly.
+
 ## Flash driver (internal flash, 0x1E00C-0x1E014)
 
 Five one-word entries (each a branch). Parameters go in RAM 0x60-0x62
@@ -289,9 +301,9 @@ remote:
 
 ## Next steps
 
-1. Test the write path in safe mode where nothing depends on it: erase the
-   empty 64 KiB block at flash 0x030000, write a test pattern, read it back,
-   erase it again. Needs a small write tool on top of libconcord.
+1. Round trip of the real application: in safe mode, erase 0x020000,
+   write back the original 3.4 image byte for byte, verify, and check that
+   the remote boots normally. Proves the update path with known-good code.
 2. Open the remote, confirm the PIC18F87J50 marking, and find the ICSP pads
    (MCLR, PGC, PGD, VDD, GND). With a PICkit the whole internal flash,
    including 0x10000-0x1FFFF, can be backed up and restored.
