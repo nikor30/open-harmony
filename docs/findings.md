@@ -231,7 +231,31 @@ pointers at 0x2E982 (order: English, French, Spanish, German):
 They are read by 0x2088A, which picks one of four messages from flags in
 RAM 0x2B3 (set from 0x2B4 by 0x20858/0x20862) and the language from
 0x2B5. 0x2088A has no direct callers (it is probably reached through a
-function pointer), so when the fallback is used is still open. (The first `write` attempt failed at
+function pointer), so when the fallback is used is still open.
+
+## Configuration format (first look)
+
+`concordance --dump-config` writes an XML header followed by the raw
+configuration as it sits in flash from 0x040000. The data starts with the
+`GSPM` cookie and a table of 32-bit little-endian **absolute flash
+addresses**:
+
+| Entry | Example value | Notes |
+|---|---|---|
+| 1 | 0x1D53EB | end of the config (0x40000 + data size); the data ends in `PTYY` |
+| 2 | 0x001600 | not an address inside the config |
+| 3-22 | 0x08FF24 ... 0x0A5A9B | section starts; 11 and 23 are 0 |
+
+- Section 3 (0x08FF24) starts with a node called `Root` followed by
+  plain-text state variable names per device (`<Device>_Power_2`,
+  `<Device>_Input_2`, `CurrentActivityState_0_4`, `ButtonSoundVolume_2`).
+- From about 0x0A5A9B on, the data is mostly 16-bit values with long runs
+  of one value, consistent with RGB565 pixels of gradient backgrounds. Same-
+  colour runs cluster at 150-166 pixels. Rendering it as a raw bitmap gives
+  no consistent width, so the images are probably compressed. Screen texts
+  such as "USB-Verbindung hergestellt" are most likely pre-rendered into
+  these images by Logitech's software, which is why no text search finds
+  them. (The first `write` attempt failed at
 `get_identity` right after the remote enumerated; a retry a few seconds
 later worked.)
 
