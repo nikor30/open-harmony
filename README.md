@@ -3,7 +3,7 @@
 Working towards open firmware for the Logitech Harmony One universal remote
 (USB `046d:c121`).
 
-Status: research. The remote can be identified and its flash read over USB;
+Status: research. Notes on a second remote, a Harmony 900 (USB networking), are in [`docs/harmony-900.md`](docs/harmony-900.md). The remote can be identified and its flash read over USB;
 nothing is written yet. See [`docs/findings.md`](docs/findings.md).
 
 So far:
