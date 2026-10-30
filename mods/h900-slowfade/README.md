@@ -1,5 +1,10 @@
 # h900-slowfade
 
+**No visible effect:** `fadedown()` is never called (its only call in
+`handlePsrvNotifyEvent` is commented out; sleep goes through `lightsDown()`).
+Written to a remote on 2026-10-30, no difference seen. Use
+[`h900-wakeblink`](../h900-wakeblink/README.md) as the visible test mod.
+
 A first, harmless change for the Harmony 900: fade the backlight out over
 about 1.5 s instead of about 0.18 s when the remote goes to sleep.
 

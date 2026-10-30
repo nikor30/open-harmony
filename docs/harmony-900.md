@@ -174,8 +174,10 @@ own update mechanism handles. Writing a region back has **not** been tried.
 
 Backlight level and timeout in `SysService.lua` are overwritten from the
 user settings (`/system/backlightlevel`, timeout) at start and on change,
-so their defaults have no visible effect. The fade timing is a fixed
-constant; [`mods/h900-slowfade`](../mods/h900-slowfade) changes it.
+so their defaults have no visible effect. `fadedown()` and `fadeup()` are
+dead code (their calls are commented out); the backlight is switched by
+`lightsUp()` and `lightsDown()`, so
+[`mods/h900-slowfade`](../mods/h900-slowfade) has no visible effect.
 
 ### Boot modes and recovery
 
@@ -226,6 +228,14 @@ remote started normally (firmware type 0, port 80 open, so `data_srv` from
 region 12 runs) and worked as before.
 
 To leave safe mode, reinsert the battery without holding a key.
+
+### First visible mod (done)
+
+[`mods/h900-wakeblink`](../mods/h900-wakeblink) makes `lightsUp()` blink
+the backlight three times whenever the LCD is switched on. Written to
+region 12 in safe mode with `zwrite` (read-back identical); after a normal
+boot the remote blinks at start and on every wake-up and otherwise works
+as before. So modified Lua in region 12 runs on the remote.
 
 ### Hardware variants
 
