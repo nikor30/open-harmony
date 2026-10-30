@@ -4,7 +4,7 @@
  * 3074, normal or safe mode). Retries in 5 s windows until a signal
  * arrives, so the key on the other remote can simply be pressed now and
  * then. Writes carrier, raw mark/space durations (us) and Logitech's
- * posting encoding to <out>, and decodes NEC frames.
+ * posting encoding to <out>, and decodes NEC and Kaseikyo frames.
  *
  *   learnir <out.txt> [attempts, default 12]
  *
@@ -49,6 +49,28 @@ static void decode_nec(const uint32_t *s, uint32_t n)
            c, (c ^ nc) == 0xff ? "" : " (command check failed)");
 }
 
+/* Kaseikyo (Panasonic, Denon, ...): 3456 mark, 1728 space, 48 bits of
+ * 432 mark + 432/1296 space, LSB first; bytes 0-1 vendor, byte 5 = XOR of 2-4 */
+static void decode_kaseikyo(const uint32_t *s, uint32_t n)
+{
+    if (n < 2 + 96 || !near(s[0], 3456) || !near(s[1], 1728))
+        return;
+    unsigned char b[6] = {0};
+    for (int i = 0; i < 48; i++) {
+        uint32_t mark = s[2 + 2 * i], space = s[3 + 2 * i];
+        if (!near(mark, 432))
+            return;
+        if (near(space, 1296))
+            b[i / 8] |= 1 << (i % 8);
+        else if (!near(space, 432))
+            return;
+    }
+    unsigned vendor = b[0] | b[1] << 8;
+    printf("Kaseikyo: vendor 0x%04X%s, data %02X %02X %02X, check %s\n", vendor,
+           vendor == 0x3254 ? " (Denon)" : vendor == 0x2002 ? " (Panasonic)" : "",
+           b[2], b[3], b[4], (b[2] ^ b[3] ^ b[4]) == b[5] ? "ok" : "FAILED");
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2 || argc > 3) {
@@ -82,6 +104,7 @@ int main(int argc, char **argv)
     }
     printf("carrier %u Hz, %u durations\n", carrier, len);
     decode_nec(sig, len);
+    decode_kaseikyo(sig, len);
     char *post = NULL;
     encode_for_posting(carrier, sig, len, &post);
     FILE *f = fopen(argv[1], "w");
