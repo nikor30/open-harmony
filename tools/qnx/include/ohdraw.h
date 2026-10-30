@@ -23,6 +23,7 @@ struct ohfont { const unsigned char *bits; const struct ohglyph *g; int ascent, 
 #include "fonts/font_button.h"
 #include "fonts/font_headline.h"
 #include "fonts/font_title.h"
+#include "fonts/font_clock.h"
 
 #define OHDRAW_LIBGF OHGFX_LIBGF ",gf_surface_create,gf_surface_get_info,gf_draw_blit2,gf_draw_finish"
 
@@ -347,6 +348,9 @@ static void dr_text_fit(const struct ohfont *f, int x, int y, const char *s, int
 
 struct spring { int x, v, target; };
 
+/* advance a spring by elapsed real time (ms), in 10 ms steps */
+static int spring_run(struct spring *s, int ms);
+
 /* response ~0.35 s: omega = 2*pi/0.35 ~ 18, k = omega^2 ~ 322, c = 2*omega ~ 36;
  * hz = steps per second (50 for 20 ms steps) */
 static int spring_step_hz(struct spring *s, int hz)
@@ -367,6 +371,15 @@ static int spring_step_hz(struct spring *s, int hz)
 static __attribute__((unused)) int spring_step(struct spring *s)
 {
 	return spring_step_hz(s, 50);
+}
+
+static __attribute__((unused)) int spring_run(struct spring *s, int ms)
+{
+	int moving = 1;
+
+	for (; ms >= 10 && moving; ms -= 10)
+		moving = spring_step_hz(s, 100);
+	return s->x != s->target;
 }
 
 #endif

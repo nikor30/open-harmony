@@ -34,7 +34,7 @@
  * if ohui fails. Log: /usr/local/cache/ohui.log. */
 #include <ohdraw.h>
 
-#define VERSION		"6"
+#define VERSION		"7"
 #define POLL_MS		10
 #define FRAME_MS	33
 #define REPEAT_DELAY	400
@@ -100,6 +100,9 @@ static int loglen;
 static char clock_text[8] = "";
 static int battery = -1;	/* level 0..8 (cache/batt_lvls.dat: mV thresholds for 1..8) */
 static int charging;
+static int docked, dock_dismissed;	/* cradle */
+static struct spring night;		/* night clock opacity 0..256*256 */
+static int light = -1;			/* ambient light sensor, raw */
 static long now;		/* ms, updated every loop */
 
 static char status_text[24] = "Ready";
@@ -123,6 +126,7 @@ struct screen {
 	int sy, sv;		/* scroll offset and velocity, 1/256 px and 1/256 px/s */
 	int content_h;		/* set when drawn */
 	long shown;		/* when the screen was pushed (scroll indicator flash) */
+	int st, snapping;	/* page target (1/256 px) while snapping to it */
 };
 static struct screen stack[4];
 static int depth;		/* index of the top screen */
@@ -934,7 +938,7 @@ static void draw_settings(struct screen *s)
 	}
 	/* about */
 	section(ST_ABOUT - 6, "Remote");
-	dr_rrect(M, ST_ABOUT, gfx_w - 1 - M, ST_ABOUT + 2 * ROW_H - 1, 12, C_CARD, 256);
+	dr_rrect(M, ST_ABOUT, gfx_w - 1 - M, ST_ABOUT + 3 * ROW_H - 1, 12, C_CARD, 256);
 	dr_text(&font_body, M + 14, ST_ABOUT + 27, "Battery", 0, C_TEXT, 256);
 	if (battery >= 0) {
 		int k = cat(v, catnum(v, 0, battery), " of 8");
@@ -948,7 +952,15 @@ static void draw_settings(struct screen *s)
 	cat(v, cat(v, 0, "Native "), VERSION);
 	dr_text(&font_body, gfx_w - M - 14 - dr_text_width(&font_body, v, 0), ST_ABOUT + ROW_H + 27, v, 0,
 		C_TEXT2, 256);
-	s->content_h = ST_ABOUT + 2 * ROW_H + 12;
+	dr_hspan(M + 14, gfx_w - 1 - M, ST_ABOUT + 2 * ROW_H, C_SEP, 256);
+	dr_text(&font_body, M + 14, ST_ABOUT + 2 * ROW_H + 27, "Light sensor", 0, C_TEXT, 256);
+	if (light >= 0)
+		catnum(v, 0, light);
+	else
+		cat(v, 0, "-");
+	dr_text(&font_body, gfx_w - M - 14 - dr_text_width(&font_body, v, 0), ST_ABOUT + 2 * ROW_H + 27, v, 0,
+		C_TEXT2, 256);
+	s->content_h = ST_ABOUT + 3 * ROW_H + 12;
 }
 
 /* colour wash in the screen's own colour behind the large title */
@@ -1034,6 +1046,60 @@ static void draw_screen(struct screen *s)
 		draw_power_bar();
 }
 
+/* sin(2*pi*k/32) * 1000 */
+static const short sin32[32] = {
+	0, 195, 383, 556, 707, 831, 924, 981, 1000, 981, 924, 831, 707, 556, 383, 195,
+	0, -195, -383, -556, -707, -831, -924, -981, -1000, -981, -924, -831, -707, -556, -383, -195,
+};
+
+/* bedside screen in the cradle: large clock, date, charging ring of dots */
+static void draw_night(int a)
+{
+	static const char *const wd[] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+	static const char *const mo[] = { "January", "February", "March", "April", "May", "June", "July",
+					  "August", "September", "October", "November", "December" };
+	char d[40];
+	int w, k, lit, cx = gfx_w / 2, cy = 236, r = 34;
+	struct tm *tm = NULL;
+#ifndef OHUI_HOST
+	long t = time(NULL);
+	tm = localtime(&t);
+#endif
+	dr_fill(0, 0, gfx_w - 1, gfx_h - 1, C_BG, a);
+	if (a < 40)
+		return;
+	w = dr_text_width(&font_clock, clock_text, -2);
+	dr_text(&font_clock, (gfx_w - w) / 2, 128, clock_text, -2, C_TEXT, a);
+	if (tm) {
+		k = cat(d, 0, wd[tm->tm_wday % 7]);
+		k = cat(d, k, ", ");
+		k = catnum(d, k, tm->tm_mday);
+		k = cat(d, k, ". ");
+		cat(d, k, mo[tm->tm_mon % 12]);
+		w = dr_text_width(&font_body, d, 0);
+		dr_text(&font_body, (gfx_w - w) / 2, 158, d, 0, C_TEXT2, a);
+	}
+	/* 32 dots; the share of the battery level lights up, the next one breathes while charging */
+	lit = battery < 0 ? 0 : battery * 4;
+	for (k = 0; k < 32; k++) {
+		int x = cx + sin32[k] * r / 1000, y = cy - sin32[(k + 8) & 31] * r / 1000;
+		unsigned c = k < lit ? (charging ? C_GREEN : C_TEXT) : 0x3a3a3c;
+		int da = a;
+		if (k == lit && charging && lit < 32)
+			da = a * (128 + (int)((now / 4) % 256 < 128 ? (now / 4) % 128 : 127 - (now / 4) % 128)) >> 8;
+		dr_circle(x, y, k < lit ? 3 : 2, k == lit && charging ? C_GREEN : c, da);
+	}
+	if (charging)
+		icon_bolt(cx - 2, cy - 5, C_GREEN, a);
+	else if (battery >= 0) {
+		cat(d, catnum(d, 0, battery), "/8");
+		w = dr_text_width(&font_caption, d, 0);
+		dr_text(&font_caption, cx - w / 2, cy + 4, d, 0, C_TEXT2, a);
+	}
+	w = dr_text_width(&font_caption, "Tap to wake", 0);
+	dr_text(&font_caption, (gfx_w - w) / 2, gfx_h - 12, "Tap to wake", 0, C_TEXT3, a);
+}
+
 /* full frame for the current navigation position */
 static void render(void)
 {
@@ -1064,6 +1130,8 @@ static void render(void)
 	dr_ox = 0;
 	dr_clip(0, 0, gfx_w - 1, gfx_h - 1);
 	draw_status_bar();
+	if (night.x > 0)
+		draw_night(night.x >> 8 > 256 ? 256 : night.x >> 8);
 }
 
 /* ---- navigation ---- */
@@ -1097,29 +1165,43 @@ static void settle_stack(void)
 		depth = d;
 }
 
-/* scroll physics for a screen; returns 1 while moving */
-static int scroll_step(struct screen *s)
+/* scroll physics for a screen over n 10 ms steps; returns 1 while moving */
+static int scroll_step(struct screen *s, int n)
 {
 	int mx = scroll_max(s) << 8;
 
 	if (gesture == G_SCROLL)
 		return 0;
+	if (s->snapping) {			/* paging: spring to the page */
+		struct spring sp;
+		sp.x = s->sy;
+		sp.v = s->sv;
+		sp.target = s->st;
+		spring_run(&sp, n * 10);
+		s->sy = sp.x;
+		s->sv = sp.v;
+		if (s->sy == s->st)
+			s->snapping = s->sv = 0;
+		return 1;
+	}
 	if (s->sy < 0 || s->sy > mx) {		/* out of bounds: spring back */
 		struct spring sp;
 		sp.x = s->sy;
 		sp.v = s->sv;
 		sp.target = s->sy < 0 ? 0 : mx;
-		spring_step_hz(&sp, 100);
+		spring_run(&sp, n * 10);
 		s->sy = sp.x;
 		s->sv = sp.v;
 		return 1;
 	}
 	if (!s->sv)
 		return 0;
-	s->sy += s->sv / 100;			/* coast, 10 ms steps */
-	s->sv = s->sv * 49 / 50;
-	if (s->sv > -2560 && s->sv < 2560)	/* below 10 px/s */
-		s->sv = 0;
+	for (; n > 0 && s->sv; n--) {		/* coast */
+		s->sy += s->sv / 100;
+		s->sv = s->sv * 49 / 50;
+		if (s->sv > -2560 && s->sv < 2560)	/* below 10 px/s */
+			s->sv = 0;
+	}
 	return 1;
 }
 
@@ -1131,14 +1213,18 @@ static int rubber(int over, int dim)
 	return over * dim * 55 / (100 * dim + 55 * a);
 }
 
-/* page the top screen up (-1) or down (+1): give it the velocity that
- * coasts one page */
+/* page the top screen up (-1) or down (+1): one page, keeping a strip of
+ * the previous page for context, snapping in with a spring */
 static void page(int dir)
 {
 	struct screen *s = &stack[depth];
-	int pg = content_bottom(s) - content_top(s) - 40;
+	int pg = content_bottom(s) - content_top(s) - 40, mx = scroll_max(s);
+	int t = ((s->snapping ? s->st : s->sy) >> 8) + dir * pg;
 
-	s->sv = dir * pg * 2 * 256;
+	if (t < 0) t = 0;
+	if (t > mx) t = mx;
+	s->st = t << 8;
+	s->snapping = 1;
 }
 
 #ifndef OHUI_HOST
@@ -1325,6 +1411,33 @@ static void update_power(void)
 	}
 	if (result == 0)
 		charging = ch != 0;
+}
+
+static int light_logged;
+
+static void update_sensors(void)
+{
+	int result = 0, v = 0;
+
+	env_get_cradle_state(&result, &v);
+	v &= 0xffff;
+	if (result == 0) {
+		if (v && !docked)
+			dock_dismissed = 0;
+		if (docked != (v != 0))
+			lognum("cradle ", v);
+		docked = v != 0;
+	}
+	result = v = 0;
+	env_get_light_level(&result, &v);
+	v &= 0xffff;
+	if (result == 0) {
+		if (light_logged < 40 && v != light) {
+			lognum("light ", v);
+			light_logged++;
+		}
+		light = v;
+	}
 }
 
 /* returns 1 if it had to change the LED (one POST) */
@@ -1593,6 +1706,16 @@ static int touch(int x, int y, int down, int was_down)
 	struct screen *s = &stack[depth];
 	int kind, index, vx, vy;
 
+	if (night.target) {			/* night clock: a tap wakes the UI */
+		if (down && !was_down) {
+			dock_dismissed = 1;
+			night.target = 0;
+		}
+		gesture = G_NONE;
+		press_kind = T_NONE;
+		return 0;
+	}
+
 	if (down) {
 		h_x[h_n % NHIST] = x;
 		h_y[h_n % NHIST] = y;
@@ -1606,6 +1729,7 @@ static int touch(int x, int y, int down, int was_down)
 		h_n = 0;
 		h_x[0] = x; h_y[0] = y; h_t[0] = now; h_n = 1;
 		s->sv = 0;				/* catch a coasting list */
+		s->snapping = 0;
 		if (depth > 0 && x < EDGE && nav.x == nav.target) {
 			gesture = G_EDGE;
 			press_kind = T_NONE;
@@ -1694,7 +1818,7 @@ int main(int argc, char **argv, char **envp)
 	gfi_layer_t il;
 	const char *body;
 	int i, n, held = -1, held_ms = 0, touching = 0, quit = 0, dirty = 1, frames = 0;
-	long last_frame = 0, last_clock = 0, last_power = 0;
+	long last_frame = 0, last_clock = 0, last_power = 0, last_sensor = 0, last_motion;
 
 	(void)argc; (void)argv; (void)envp;
 	if ((n = gfx_init()) != 0 || (n = dr_init()) != 0) {
@@ -1732,6 +1856,7 @@ int main(int argc, char **argv, char **envp)
 	sw_spring.x = sw_spring.target = set_sound ? 256 << 8 : 0;
 	update_clock();
 	update_power();
+	update_sensors();
 	stack[0].kind = S_HOME;
 	stack[0].shown = now;
 	if (gfi_group_attach(&grp, 1, 0) != 0 ||
@@ -1741,7 +1866,7 @@ int main(int argc, char **argv, char **envp)
 		logs("input setup failed", NULL);
 		return 4;
 	}
-	last_clock = last_power = now_ms();
+	last_clock = last_power = last_sensor = last_motion = now_ms();
 
 	while (!quit) {
 		int key = -1, moving;
@@ -1779,6 +1904,10 @@ int main(int argc, char **argv, char **envp)
 			b[2] = 0;
 			logs("key ", b);
 			dirty = 1;
+			if (night.target) {
+				dock_dismissed = 1;
+				night.target = 0;
+			}
 			if (key == SCAN_OFF && power_off_index() >= 0)
 				start_activity(power_off_index());
 			else if (key == SCAN_ACTIVITIES)
@@ -1810,6 +1939,14 @@ int main(int argc, char **argv, char **envp)
 			update_clock();
 			dirty = 1;
 		}
+		if (now - last_sensor > 1000) {
+			int d = docked;
+			last_sensor = now;
+			update_sensors();
+			night.target = docked && !dock_dismissed ? 256 << 8 : 0;
+			if (d != docked || (stack[depth].kind == S_SETTINGS))
+				dirty = 1;
+		}
 		if (now - last_power > 4000) {
 			int b = battery, c = charging;
 			last_power = now;
@@ -1818,23 +1955,36 @@ int main(int argc, char **argv, char **envp)
 				dirty = 1;
 		}
 
-		/* 3. motion (10 ms steps) */
-		moving = 0;
-		if (gesture != G_EDGE && nav.x != nav.target) {
-			spring_step_hz(&nav, 100);
-			moving = 1;
-		}
-		if (seg_spring.x != seg_spring.target) {
-			spring_step_hz(&seg_spring, 100);
-			moving = 1;
-		}
-		if (sw_spring.x != sw_spring.target) {
-			spring_step_hz(&sw_spring, 100);
-			moving = 1;
+		/* 3. motion, by real elapsed time in 10 ms steps */
+		{
+			int steps = (int)(now - last_motion) / 10;
+			if (steps > 10)
+				steps = 10;		/* after a stall, do not jump */
+			if (steps > 0)
+				last_motion += steps * 10;
+			if (steps < 0)
+				last_motion = now, steps = 0;
+			moving = 0;
+			if (steps) {
+				if (gesture != G_EDGE && nav.x != nav.target)
+					spring_run(&nav, steps * 10);
+				if (seg_spring.x != seg_spring.target)
+					spring_run(&seg_spring, steps * 10);
+				if (sw_spring.x != sw_spring.target)
+					spring_run(&sw_spring, steps * 10);
+				if (night.x != night.target)
+					spring_run(&night, steps * 10);
+				if (scroll_step(&stack[depth], steps))
+					moving = 1;
+			}
+			if (nav.x != nav.target || seg_spring.x != seg_spring.target ||
+			    sw_spring.x != sw_spring.target || night.x != night.target ||
+			    stack[depth].snapping || stack[depth].sv)
+				moving = 1;
+			if (night.x && charging)
+				moving = moving || (now - last_frame) > 60;	/* breathing dot */
 		}
 		settle_stack();
-		if (scroll_step(&stack[depth]))
-			moving = 1;
 		if (press_kind != T_NONE && gesture == G_TAP && now >= press_t && now < press_t + 20)
 			dirty = 1;		/* delayed press becomes visible */
 		if (now - stack[depth].shown < 1300)
