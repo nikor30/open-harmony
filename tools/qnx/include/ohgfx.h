@@ -15,7 +15,7 @@
 static gf_dev_t gfx_dev;
 static gf_display_t gfx_display;
 static gf_context_t gfx_ctx;
-static int gfx_w, gfx_h, gfx_main_layer;
+static int gfx_w, gfx_h, gfx_main_layer, gfx_format;
 
 /* Attach to the display and make the main layer ours (as flash-gf does).
  * Returns 0 or the number of the failed step. */
@@ -35,6 +35,7 @@ static int gfx_init(void)
 	gfx_w = ((unsigned short *)info)[GF_DISPINFO_XRES / 2];
 	gfx_h = ((unsigned short *)info)[GF_DISPINFO_YRES / 2];
 	gfx_main_layer = info[GF_DISPINFO_MAIN_LAYER / 4];
+	gfx_format = info[GF_DISPINFO_FORMAT / 4];
 	if (gfx_w < 100 || gfx_w > 1024 || gfx_h < 100 || gfx_h > 1024)
 		return 3;
 	if (gf_layer_attach(&layer, gfx_display, gfx_main_layer, 0) != 0)
@@ -110,7 +111,7 @@ static int gfx_utf8_base(unsigned char c)
 }
 
 /* Draw text at scale s (cell 6s x 8s); bg ~0 = transparent. Returns end x. */
-static int gfx_text(int x, int y, const char *str, int s, unsigned fg, unsigned bg)
+static __attribute__((unused)) int gfx_text(int x, int y, const char *str, int s, unsigned fg, unsigned bg)
 {
 	int r, c;
 

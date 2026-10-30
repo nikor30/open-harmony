@@ -73,6 +73,19 @@ void gf_context_set_fgcolor(gf_context_t ctx, unsigned rgb);	/* 0xRRGGBB */
 int gf_draw_begin(gf_context_t ctx);
 void gf_draw_rect(gf_context_t ctx, int x1, int y1, int x2, int y2);
 void gf_draw_end(gf_context_t ctx);
+void gf_draw_finish(gf_context_t ctx);
+/* off-screen surface; info: +16 stride (bytes), +20 vaddr (as flash-gf uses it) */
+int gf_surface_create(gf_surface_t *surface, gf_dev_t dev, int w, int h, int format,
+		void *palette, unsigned flags);
+int gf_surface_get_info(gf_surface_t surface, void *info);
+/* copy src (NULL = context surface) rectangle x1..x2, y1..y2 to dst at dx, dy */
+void gf_draw_blit2(gf_context_t ctx, gf_surface_t src, gf_surface_t dst,
+		int x1, int y1, int x2, int y2, int dx, int dy);
+
+/* time */
+struct tm { int tm_sec, tm_min, tm_hour, tm_mday, tm_mon, tm_year, tm_wday, tm_yday, tm_isdst; };
+long time(long *t);
+struct tm *localtime(const long *t);
 
 /* GF input (also libgf.so.1), as used by flash-gf's input thread.
  * Events are 32 bytes: +0 type (1 pointer/touch, 2 key); pointer: +8 x,

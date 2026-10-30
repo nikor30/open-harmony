@@ -28,3 +28,14 @@ QNX SDK:
   remote's libraries from their program headers alone, e.g.
   `dynsyms.py backup/h900/ifs-app/usr/lib/libgf.so.1 gf_draw_rect`, so a
   stub symbol that the remote does not have is caught before writing.
+- [`include/ohdraw.h`](include/ohdraw.h): software renderer on top of
+  `ohgfx.h`. Frames go into an off-screen surface (`gf_surface_create`;
+  `gf_surface_get_info` gives the stride at +16 and the pixel memory at
+  +20, as flash-gf uses them) and are copied to the display with
+  `gf_draw_blit2(ctx, src, NULL, x1, y1, x2, y2, dx, dy)`, so nothing
+  flickers. RGB565 blending (5-bit alpha on `0x07e0f81f`), anti-aliased
+  rounded rectangles, soft shadows, anti-aliased text and a critically
+  damped spring, all in integers.
+- [`mkfont.py`](mkfont.py) turns a TrueType font into 4-bit glyph tables
+  for `ohdraw.h`; [`include/fonts/`](include/fonts) holds Noto Sans
+  (SIL Open Font License) in six styles.
