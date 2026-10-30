@@ -200,7 +200,7 @@ static void dr_rrect(int x1, int y1, int x2, int y2, int r, unsigned c, int a)
 }
 
 /* soft drop shadow under a rounded rectangle */
-static void dr_shadow(int x1, int y1, int x2, int y2, int r, int dy, int strength)
+static __attribute__((unused)) void dr_shadow(int x1, int y1, int x2, int y2, int r, int dy, int strength)
 {
 	int k;
 

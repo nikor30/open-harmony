@@ -45,6 +45,7 @@ void exit(int status) __attribute__((noreturn));
 int env_service_connect(const char *host);
 int env_set_backlight_master(int on, int *result);
 int env_set_backlight_master_level(int level, int *result);
+int env_get_battery_level(int *result, int *level);	/* order as in SysService.lua */
 
 /* libgf.so.1 (QNX Graphics Framework), call sequence and argument order as
  * used by flash-gf. Handles are opaque pointers; info structs are only
@@ -84,6 +85,8 @@ void gf_draw_blit2(gf_context_t ctx, gf_surface_t src, gf_surface_t dst,
 		int x1, int y1, int x2, int y2, int dx, int dy);
 
 /* time */
+struct timespec { long tv_sec; long tv_nsec; };
+int clock_gettime(int clock_id, struct timespec *ts);	/* 0 = CLOCK_REALTIME */
 struct tm { int tm_sec, tm_min, tm_hour, tm_mday, tm_mon, tm_year, tm_wday, tm_yday, tm_isdst; };
 long time(long *t);
 struct tm *localtime(const long *t);
