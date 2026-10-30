@@ -52,8 +52,7 @@ static int dr_init(void)
 		info[i] = 0;
 	if (gf_surface_create(&dr_surface, gfx_dev, gfx_w, gfx_h, gfx_format, NULL, 0) != 0)
 		return 10;
-	if (gf_surface_get_info(dr_surface, info) != 0)
-		return 11;
+	gf_surface_get_info(dr_surface, info);	/* no status: returns info itself */
 	dr_stride = info[4] / 2;
 #ifdef DR_HOST_FB
 	dr_px = DR_HOST_FB;	/* rendering tests on the PC */

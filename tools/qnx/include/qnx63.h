@@ -74,7 +74,8 @@ int gf_draw_begin(gf_context_t ctx);
 void gf_draw_rect(gf_context_t ctx, int x1, int y1, int x2, int y2);
 void gf_draw_end(gf_context_t ctx);
 void gf_draw_finish(gf_context_t ctx);
-/* off-screen surface; info: +16 stride (bytes), +20 vaddr (as flash-gf uses it) */
+/* off-screen surface; info: +16 stride (bytes), +20 vaddr (as flash-gf uses it).
+ * gf_surface_get_info only copies the fields and returns nothing useful. */
 int gf_surface_create(gf_surface_t *surface, gf_dev_t dev, int w, int h, int format,
 		void *palette, unsigned flags);
 int gf_surface_get_info(gf_surface_t surface, void *info);
