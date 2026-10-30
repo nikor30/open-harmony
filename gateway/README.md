@@ -21,10 +21,22 @@ and activities, serves a web UI and links itself to Home Assistant.
   `irgw/<id>/code` (raw code JSON), `irgw/<id>/received`, `irgw/<id>/status`.
 - **REST API**: `GET /api/status`, `GET|PUT /api/db`, `GET /api/last`,
   `POST /api/send` (`{"device","command"}` or `{"code":{...}}`),
-  `POST /api/run` (`{"activity"}`), `POST /api/selftest` (sends a NEC code with the
+  `POST /api/run` (`{"activity"}`), `POST /api/rf/sniff` (`{"on":true,"minutes":10}`, 433 MHz listening
+  mode), `GET /api/rf/sniff` (state, drop counters and the last 40 different packets), `POST /api/selftest` (sends a NEC code with the
   receiver on; `selftest` in the status is 1 if the gateway heard itself), `POST /api/config`,
   `POST /api/update` (multipart `firmware`). WebSocket `/ws` streams
-  `rx`, `sent`, `activity_start|done`, `db` events.
+  `rx`, `sent`, `activity_start|done`, `db`, `rf_sniff`, `sniff_status` events.
+
+**433 MHz listening** (Live tab): for up to 120 minutes the receive pin is
+taken from rc-switch and every edge is recorded. The stream is cut into
+packets (the idle receiver never goes quiet, so pulses under 150 µs end a
+packet and up to 8 noise pulses are trimmed from either end), and the
+encoding is guessed: *pwm* (high pulses short/long), *ppm* (low gaps
+short/long), *nrz* (widths as multiples of one unit, e.g. Manchester).
+Each different packet is listed with bits as hex, timing, the first 96
+pulses and a repeat counter; new ones also go to MQTT `irgw/<id>/rf_sniff`.
+Loopback check: sending rc-switch code 0xABCDEF (protocol 1, 350 µs) while
+listening shows `pwm 25 bits abcdef0` (the sync pulse adds a bit).
 
 Pins: IR receive GPIO23, IR send GPIO2 (7 IR LEDs), 433 MHz receive GPIO13,
 send GPIO22. Both IR pins confirmed on 2026-10-30 (a learned SAMSUNG36 code;

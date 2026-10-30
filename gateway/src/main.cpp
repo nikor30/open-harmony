@@ -34,6 +34,7 @@
 #include <RCSwitch.h>
 #include <mutex>
 #include "web_index.h"
+#include "rf_sniff.h"
 
 // Wi-Fi and update password: root-only file outside the repository,
 // /root/.config/open-harmony/open_harmony_secrets.h (include path set in platformio.ini)
@@ -502,6 +503,9 @@ static void statusJson(JsonDocument &d) {
   d["fsTotal"] = LittleFS.totalBytes();
   d["running"] = runningActivity;
   d["selftest"] = lastSelftest;
+  JsonDocument sn;
+  rfsniff::status(sn);
+  d["sniff"] = sn;
 }
 
 // collect a request body (may arrive in chunks), then call done(body)
@@ -517,6 +521,46 @@ static String takeBody(AsyncWebServerRequest *req) {
   delete s;
   req->_tempObject = nullptr;
   return b;
+}
+
+// ---------------------------------------------------------------- 433 MHz listening
+
+static bool sniffing;
+
+static void sniffStart(uint32_t minutes) {
+  if (!sniffing) rf.disableReceive();  // the sniffer owns the receive pin now
+  rfsniff::start(PIN_RF_RX, minutes * 60000UL);
+  sniffing = true;
+}
+
+static void sniffStopped() {  // listening ended (timeout or request): rc-switch takes over again
+  rfsniff::stop();
+  rf.enableReceive(digitalPinToInterrupt(PIN_RF_RX));
+  sniffing = false;
+}
+
+static void sniffEmit(JsonDocument &pkt, bool isNew) {
+  JsonDocument e;
+  e["packet"] = pkt;
+  logEvent("rf_sniff", e);
+  if (isNew && mqtt.connected()) {
+    JsonDocument m;
+    m.set(pkt);
+    m.remove("timings");
+    String s;
+    serializeJson(m, s);
+    mqtt.publish((topicBase() + "/rf_sniff").c_str(), s.c_str());
+  }
+}
+
+static void pollSniff() {
+  if (!sniffing) return;
+  if (!rfsniff::poll(sniffEmit)) {
+    sniffStopped();
+    JsonDocument e;
+    rfsniff::status(e);
+    logEvent("sniff_status", e);
+  }
 }
 
 static void setupWeb() {
@@ -549,6 +593,18 @@ static void setupWeb() {
       "/api/send", HTTP_POST,
       [](AsyncWebServerRequest *req) {
         addJob("send", takeBody(req));
+        req->send(202, "application/json", "{}");
+      },
+      nullptr, onBody);
+  server.on("/api/rf/sniff", HTTP_GET, [](AsyncWebServerRequest *req) {
+    JsonDocument d;
+    rfsniff::list(d);
+    sendJson(req, d);
+  });
+  server.on(
+      "/api/rf/sniff", HTTP_POST,
+      [](AsyncWebServerRequest *req) {
+        addJob("sniff", takeBody(req));
         req->send(202, "application/json", "{}");
       },
       nullptr, onBody);
@@ -675,7 +731,8 @@ void setup() {
 
 void loop() {
   pollIr();
-  pollRf();
+  if (sniffing) pollSniff();
+  else pollRf();
   for (;;) {
     String job;
     {
@@ -714,6 +771,12 @@ void loop() {
       e["pin"] = PIN_IR_TX;
       logEvent("selftest", e);
       lastSelftest = rxCount != before ? 1 : 0;
+    } else if (op == "sniff") {  // {"on":true,"minutes":10}
+      if (d["on"] | false) sniffStart(constrain((int)(d["minutes"] | 10), 1, 120));
+      else if (sniffing) sniffStopped();
+      JsonDocument e;
+      rfsniff::status(e);
+      logEvent("sniff_status", e);
     } else if (op == "run") {
       startActivity(d["activity"] | "");
     } else if (d["device"].is<const char *>()) {
