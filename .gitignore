@@ -14,3 +14,6 @@ mods/h900-input/ohinput
 mods/h900-keymap/ohkeys
 mods/h900-hao/ohhao
 mods/h900-ui/ohui
+gateway/secrets.h
+gateway/.pio/
+gateway/mqtt.secret

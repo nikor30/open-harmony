@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>IR Gateway</title>
+<style>
+:root {
+  --bg: #000; --card: #1c1c1e; --card2: #2c2c2e; --sep: #38383a;
+  --text: #fff; --text2: #8e8e93; --text3: #636366;
+  --accent: #0a84ff; --green: #30d158; --yellow: #ffd60a; --red: #ff453a; --purple: #bf5af2; --orange: #ff9f0a;
+  --r: 14px;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Noto Sans", system-ui, sans-serif; }
+main { max-width: 720px; margin: 0 auto; padding: 0 16px calc(96px + env(safe-area-inset-bottom)); }
+header { position: sticky; top: 0; z-index: 5; padding: 14px 16px 10px; margin: 0 -16px;
+  background: rgba(0,0,0,.72); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%); }
+header .row { display: flex; align-items: center; gap: 10px; }
+h1 { font-size: 30px; line-height: 1.1; letter-spacing: -.02em; margin: 6px 0 2px; }
+h2 { font-size: 13px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase; color: var(--text2); margin: 26px 4px 8px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; font-size: 13px;
+  background: rgba(142,142,147,.18); color: var(--text2); }
+.pill i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.pill.ok { color: var(--green); background: rgba(48,209,88,.16); }
+.pill.warn { color: var(--yellow); background: rgba(255,214,10,.14); }
+.pill.err { color: var(--red); background: rgba(255,69,58,.14); }
+.spacer { flex: 1; }
+.group { background: var(--card); border-radius: var(--r); overflow: hidden; }
+.item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 52px; position: relative;
+  cursor: pointer; transition: background .12s; user-select: none; }
+.item + .item::before { content: ""; position: absolute; top: 0; left: 58px; right: 0; height: 1px; background: var(--sep); }
+.item.noicon + .item.noicon::before { left: 14px; }
+.item:active, .item.pressed { background: var(--card2); }
+.icon { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; flex: none;
+  font-weight: 600; font-size: 15px; color: #fff; }
+.item .title { flex: 1; min-width: 0; }
+.item .title b { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item .title small { color: var(--text2); font-size: 13px; }
+.chev { width: 8px; height: 8px; border: solid var(--text3); border-width: 2px 2px 0 0; transform: rotate(45deg); flex: none; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.tile { background: var(--card2); border-radius: 12px; padding: 12px; min-height: 52px; display: flex; align-items: center;
+  justify-content: center; text-align: center; font-weight: 500; cursor: pointer; user-select: none; position: relative;
+  transition: transform .12s cubic-bezier(.2,.8,.2,1), background .12s; box-shadow: inset 0 1px 0 rgba(255,255,255,.06); }
+.tile:active, .tile.pressed { transform: scale(.96); background: #48484a; }
+.tile .kind { position: absolute; top: 6px; right: 8px; font-size: 10px; color: var(--text3); letter-spacing: .04em; }
+.tile.flash { animation: flash .5s; }
+@keyframes flash { 0% { background: var(--accent); } 100% { background: var(--card2); } }
+button, .btn { font: inherit; border: 0; border-radius: 12px; padding: 12px 16px; background: var(--card2); color: var(--accent);
+  font-weight: 600; cursor: pointer; transition: transform .1s, opacity .1s; }
+button:active { transform: scale(.97); opacity: .8; }
+button.primary { background: var(--accent); color: #fff; }
+button.danger { color: var(--red); }
+button.wide { width: 100%; }
+input, select { font: inherit; color: var(--text); background: transparent; border: 0; outline: 0; width: 100%; padding: 0; }
+.field { display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 48px; position: relative; }
+.field + .field::before { content: ""; position: absolute; top: 0; left: 14px; right: 0; height: 1px; background: var(--sep); }
+.field label { color: var(--text); flex: none; width: 110px; }
+.field input, .field select { text-align: right; color: var(--text2); }
+.muted { color: var(--text2); font-size: 14px; margin: 8px 4px; }
+.code { font: 13px ui-monospace, "SF Mono", Menlo, monospace; color: var(--text2); word-break: break-all; }
+/* tab bar */
+nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; justify-content: center;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+  background: rgba(22,22,24,.78); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-top: 1px solid rgba(255,255,255,.08); }
+nav div { display: flex; gap: 4px; max-width: 720px; width: 100%; }
+nav a { flex: 1; text-align: center; color: var(--text2); text-decoration: none; font-size: 11px; padding: 4px 0;
+  border-radius: 10px; transition: color .15s; }
+nav a svg { display: block; margin: 2px auto 2px; width: 24px; height: 24px; }
+nav a.on { color: var(--accent); }
+section { display: none; animation: in .28s cubic-bezier(.2,.8,.2,1); }
+section.on { display: block; }
+@keyframes in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* sheet */
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,.5); opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 9; }
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; max-width: 720px; margin: 0 auto; max-height: 88vh; overflow: auto;
+  background: #1c1c1e; border-radius: 18px 18px 0 0; padding: 8px 16px calc(20px + env(safe-area-inset-bottom));
+  transform: translateY(105%); transition: transform .38s cubic-bezier(.2,.9,.25,1); box-shadow: 0 -10px 40px rgba(0,0,0,.5); }
+.sheet .grab { width: 36px; height: 5px; border-radius: 3px; background: #48484a; margin: 4px auto 10px; }
+.open .scrim { opacity: 1; pointer-events: auto; }
+.open .sheet { transform: none; }
+.sheet h3 { margin: 4px 0 12px; font-size: 20px; letter-spacing: -.01em; }
+.sheet .group { background: #2c2c2e; }
+.sheet .field + .field::before { background: #48484a; }
+.wave { display: flex; justify-content: center; gap: 6px; height: 46px; align-items: center; margin: 18px 0; }
+.wave i { width: 6px; border-radius: 3px; background: var(--accent); animation: wave 1s ease-in-out infinite; }
+.wave i:nth-child(2) { animation-delay: .1s } .wave i:nth-child(3) { animation-delay: .2s }
+.wave i:nth-child(4) { animation-delay: .3s } .wave i:nth-child(5) { animation-delay: .4s }
+@keyframes wave { 0%,100% { height: 10px; opacity: .5 } 50% { height: 40px; opacity: 1 } }
+.feed .item { cursor: default; }
+.step { display: flex; align-items: center; gap: 8px; padding: 10px 12px; }
+.step + .step { border-top: 1px solid #48484a; }
+.step select, .step input { background: #3a3a3c; border-radius: 8px; padding: 8px; color: var(--text); text-align: left; }
+.step input { width: 80px; }
+.step button { padding: 8px 10px; }
+.toast { position: fixed; left: 50%; bottom: calc(84px + env(safe-area-inset-bottom)); transform: translate(-50%, 20px); opacity: 0;
+  background: rgba(44,44,46,.95); padding: 10px 16px; border-radius: 99px; font-size: 14px; transition: all .25s; z-index: 20; pointer-events: none; }
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="row"><span id="gwname" class="muted" style="margin:0">IR Gateway</span><span class="spacer"></span>
+      <span id="mqttpill" class="pill"><i></i>Home Assistant</span></div>
+    <h1 id="title">Devices</h1>
+  </header>
+
+  <section id="tab-devices" class="on">
+    <div id="devices"></div>
+    <h2></h2>
+    <button class="wide" onclick="editDevice()">Add Device</button>
+  </section>
+
+  <section id="tab-activities">
+    <p class="muted">An activity sends a series of commands with pauses in between, e.g. switch on projector, receiver and player and pick the inputs.</p>
+    <div id="activities"></div>
+    <h2></h2>
+    <button class="wide" onclick="editActivity()">Add Activity</button>
+  </section>
+
+  <section id="tab-live">
+    <p class="muted">Codes the gateway receives right now, from any IR remote (including the Harmony 900) or 433&nbsp;MHz sender. Save one to a device with a tap.</p>
+    <div class="group feed" id="feed"><div class="item noicon"><div class="title"><small>Waiting for a code…</small></div></div></div>
+  </section>
+
+  <section id="tab-settings">
+    <h2>Gateway</h2>
+    <div class="group">
+      <div class="field"><label>Name</label><input id="s-name"></div>
+      <div class="field"><label>Address</label><input id="s-ip" disabled></div>
+      <div class="field"><label>Firmware</label><input id="s-fw" disabled></div>
+      <div class="field"><label>Signal</label><input id="s-rssi" disabled></div>
+      <div class="field"><label>Storage</label><input id="s-fs" disabled></div>
+    </div>
+    <h2>Home Assistant (MQTT)</h2>
+    <div class="group">
+      <div class="field"><label>Broker</label><input id="s-mqttHost" placeholder="192.168.10.10"></div>
+      <div class="field"><label>Port</label><input id="s-mqttPort" inputmode="numeric" placeholder="1883"></div>
+      <div class="field"><label>User</label><input id="s-mqttUser" autocomplete="off"></div>
+      <div class="field"><label>Password</label><input id="s-mqttPass" type="password" placeholder="unchanged" autocomplete="new-password"></div>
+    </div>
+    <p class="muted">Devices, commands and activities appear in Home Assistant automatically (MQTT discovery). Every received code fires the event entity “Received code”.</p>
+    <h2>Wi-Fi</h2>
+    <div class="group">
+      <div class="field"><label>Network</label><input id="s-ssid"></div>
+      <div class="field"><label>Password</label><input id="s-pass" type="password" placeholder="unchanged" autocomplete="new-password"></div>
+    </div>
+    <h2></h2>
+    <button class="primary wide" onclick="saveSettings()">Save</button>
+    <h2>Library</h2>
+    <div class="group">
+      <div class="item noicon" onclick="exportDb()"><div class="title"><b>Export library</b><small>Download devices, commands and activities as JSON</small></div><span class="chev"></span></div>
+      <div class="item noicon" onclick="document.getElementById('imp').click()"><div class="title"><b>Import library</b><small>Replace everything with a saved JSON file</small></div><span class="chev"></span></div>
+    </div>
+    <input id="imp" type="file" accept="application/json" hidden onchange="importDb(this.files[0])">
+    <h2>Firmware</h2>
+    <div class="group">
+      <div class="item noicon" onclick="document.getElementById('fw').click()"><div class="title"><b>Update firmware</b><small>Upload a firmware.bin</small></div><span class="chev"></span></div>
+    </div>
+    <input id="fw" type="file" accept=".bin" hidden onchange="updateFw(this.files[0])">
+  </section>
+</main>
+
+<nav><div>
+  <a href="#devices" data-tab="devices" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="12" rx="2.5"/><path d="M8 20h8"/></svg>Devices</a>
+  <a href="#activities" data-tab="activities"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 5.5v13l10-6.5z" stroke-linejoin="round"/></svg>Activities</a>
+  <a href="#live" data-tab="live"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 12h.01M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8"/></svg>Live</a>
+  <a href="#settings" data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>Settings</a>
+</div></nav>
+
+<div id="sheetwrap"><div class="scrim" onclick="closeSheet()"></div><div class="sheet" id="sheet"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const TINT = { Television: '#0a84ff', Projector: '#0a84ff', Receiver: '#ff9f0a', Amplifier: '#ff9f0a', Player: '#bf5af2',
+  Console: '#30d158', Light: '#ffd60a', Socket: '#ffd60a', Other: '#64d2ff' };
+let db = { devices: [], activities: [] }, status = {}, learning = null, ws;
+
+const slug = s => (s || '').toLowerCase().normalize('NFKD').replace(/[^\w]+/g, '_').replace(/^_|_$/g, '') || 'x';
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function uniq(base, list) { let id = slug(base), n = 2; while (list.some(x => x.id === id)) id = slug(base) + '_' + n++; return id; }
+function toast(t) { const e = $('#toast'); e.textContent = t; e.classList.add('on'); clearTimeout(e._t); e._t = setTimeout(() => e.classList.remove('on'), 1800); }
+async function api(path, opt = {}) {
+  const r = await fetch('/api/' + path, { headers: { 'Content-Type': 'application/json' }, ...opt });
+  if (!r.ok) throw new Error(path + ' ' + r.status);
+  return r.headers.get('content-type')?.includes('json') ? r.json() : null;
+}
+async function saveDb() { await api('db', { method: 'PUT', body: JSON.stringify(db) }); render(); }
+function codeText(c) {
+  if (!c) return '';
+  if (c.kind === 'rf') return `433 MHz · ${c.code} · ${c.bits} bit · protocol ${c.protocol}`;
+  if (c.value) return `IR · ${c.protocol} · 0x${c.value} · ${c.bits} bit`;
+  if (c.state) return `IR · ${c.protocol} · state ${c.state.length / 2} bytes`;
+  return `IR · raw · ${c.raw?.length || 0} timings`;
+}
+
+// ---- tabs
+const TITLES = { devices: 'Devices', activities: 'Activities', live: 'Live', settings: 'Settings' };
+function showTab(t) {
+  document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === 'tab-' + t));
+  document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', a.dataset.tab === t));
+  $('#title').textContent = TITLES[t];
+  if (t === 'settings') fillSettings();
+}
+window.addEventListener('hashchange', () => showTab(location.hash.slice(1) || 'devices'));
+
+// ---- rendering
+function render() {
+  $('#devices').innerHTML = db.devices.map((d, i) => `
+    <h2>${esc(d.name)}</h2>
+    <div class="grid">${(d.commands || []).map(c => `
+      <div class="tile" data-dev="${esc(d.id)}" data-cmd="${esc(c.id)}">${esc(c.name)}<span class="kind">${c.code?.kind === 'rf' ? '433' : 'IR'}</span></div>`).join('')}
+      <div class="tile" style="color:var(--accent)" onclick="learn(${i})">+ Learn</div>
+    </div>
+    <p class="muted" style="text-align:right"><a style="color:var(--text2)" href="javascript:editDevice(${i})">Edit ${esc(d.name)}</a></p>`).join('')
+    || '<p class="muted">No devices yet. Add one, then teach it its commands with any remote.</p>';
+  $('#activities').innerHTML = db.activities.length ? `<div class="group">${db.activities.map((a, i) => `
+    <div class="item" data-act="${esc(a.id)}"><div class="icon" style="background:${['#0a84ff', '#bf5af2', '#ff9f0a', '#30d158'][i % 4]}">${esc((a.name || '?')[0].toUpperCase())}</div>
+      <div class="title"><b>${esc(a.name)}</b><small>${a.steps.length} steps · tap to run</small></div>
+      <button onclick="event.stopPropagation();editActivity(${i})" style="padding:6px 12px">Edit</button></div>`).join('')}</div>`
+    : '<p class="muted">No activities yet.</p>';
+}
+
+// press feedback on touch-down, action on release (cancel by moving away)
+document.addEventListener('pointerdown', e => {
+  const t = e.target.closest('.tile[data-cmd], .item[data-act]');
+  if (!t) return;
+  t.classList.add('pressed');
+  const up = ev => {
+    t.classList.remove('pressed');
+    document.removeEventListener('pointerup', up); document.removeEventListener('pointercancel', up);
+    if (ev.type !== 'pointerup' || !t.contains(document.elementFromPoint(ev.clientX, ev.clientY))) return;
+    if (t.dataset.cmd) { api('send', { method: 'POST', body: JSON.stringify({ device: t.dataset.dev, command: t.dataset.cmd }) }); t.classList.remove('flash'); void t.offsetWidth; t.classList.add('flash'); }
+    else { api('run', { method: 'POST', body: JSON.stringify({ activity: t.dataset.act }) }); toast('Running activity…'); }
+  };
+  document.addEventListener('pointerup', up); document.addEventListener('pointercancel', up);
+});
+
+// ---- sheet
+function openSheet(html) { $('#sheet').innerHTML = '<div class="grab"></div>' + html; $('#sheetwrap').classList.add('open'); }
+function closeSheet() { $('#sheetwrap').classList.remove('open'); learning = null; }
+
+function editDevice(i) {
+  const d = i === undefined ? { name: '', type: 'Television', commands: [] } : db.devices[i];
+  openSheet(`<h3>${i === undefined ? 'New Device' : 'Edit Device'}</h3>
+    <div class="group"><div class="field"><label>Name</label><input id="d-name" value="${esc(d.name)}" placeholder="Projector"></div>
+    <div class="field"><label>Type</label><select id="d-type">${Object.keys(TINT).map(t => `<option ${t === d.type ? 'selected' : ''}>${t}</option>`).join('')}</select></div></div>
+    ${i === undefined ? '' : `<h2>Commands</h2><div class="group">${d.commands.map((c, k) => `
+      <div class="item noicon"><div class="title"><b>${esc(c.name)}</b><small class="code">${esc(codeText(c.code))}</small></div>
+      <button class="danger" style="padding:6px 10px" onclick="delCmd(${i},${k})">Delete</button></div>`).join('') || '<div class="item noicon"><small class="muted">none</small></div>'}</div>`}
+    <h2></h2><button class="primary wide" onclick="saveDevice(${i})">Save</button>
+    ${i === undefined ? '' : `<h2></h2><button class="danger wide" onclick="delDevice(${i})">Delete Device</button>`}`);
+}
+async function saveDevice(i) {
+  const name = $('#d-name').value.trim(); if (!name) return;
+  if (i === undefined) db.devices.push({ id: uniq(name, db.devices), name, type: $('#d-type').value, commands: [] });
+  else Object.assign(db.devices[i], { name, type: $('#d-type').value });
+  closeSheet(); await saveDb();
+}
+async function delDevice(i) { if (!confirm('Delete this device and its commands?')) return; db.devices.splice(i, 1); closeSheet(); await saveDb(); }
+async function delCmd(i, k) { db.devices[i].commands.splice(k, 1); await saveDb(); editDevice(i); }
+
+// ---- learning: wait for the next received code, then name and save it
+function learn(i, code) {
+  learning = { dev: i, code: code || null };
+  learnSheet();
+}
+function learnSheet() {
+  const d = db.devices[learning.dev], c = learning.code;
+  openSheet(`<h3>Learn for ${esc(d.name)}</h3>${c ? `
+    <div class="group"><div class="item noicon"><div class="title"><b>Got it</b><small class="code">${esc(codeText(c))}</small></div>
+      <button style="padding:6px 12px" onclick="testCode()">Test</button></div>
+      <div class="field"><label>Name</label><input id="l-name" placeholder="Power"></div></div>
+    <h2></h2><button class="primary wide" onclick="saveLearned()">Save Command</button>
+    <h2></h2><button class="wide" onclick="learning.code=null;learnSheet()">Try Again</button>` : `
+    <p class="muted" style="text-align:center">Point the original remote at the gateway and press the button once.</p>
+    <div class="wave"><i></i><i></i><i></i><i></i><i></i></div>
+    <p class="muted" style="text-align:center">Infrared and 433&nbsp;MHz are both heard.</p>
+    <button class="wide" onclick="closeSheet()">Cancel</button>`}`);
+  if (c) setTimeout(() => $('#l-name')?.focus(), 350);
+}
+function testCode() { api('send', { method: 'POST', body: JSON.stringify({ code: learning.code }) }); toast('Sent'); }
+async function saveLearned() {
+  const name = $('#l-name').value.trim() || 'Command', d = db.devices[learning.dev];
+  d.commands.push({ id: uniq(name, d.commands), name, code: learning.code });
+  closeSheet(); await saveDb(); toast('Saved ' + name);
+}
+
+// ---- activities
+function editActivity(i) {
+  const a = i === undefined ? { name: '', steps: [] } : JSON.parse(JSON.stringify(db.activities[i]));
+  window._act = { i, a };
+  drawActivity();
+}
+function drawActivity() {
+  const { i, a } = window._act;
+  const opts = sel => db.devices.flatMap(d => d.commands.map(c =>
+    `<option value="${esc(d.id)}/${esc(c.id)}" ${sel === d.id + '/' + c.id ? 'selected' : ''}>${esc(d.name)} · ${esc(c.name)}</option>`)).join('');
+  openSheet(`<h3>${i === undefined ? 'New Activity' : 'Edit Activity'}</h3>
+    <div class="group"><div class="field"><label>Name</label><input id="a-name" value="${esc(a.name)}" placeholder="Watch a movie" oninput="_act.a.name=this.value"></div></div>
+    <h2>Steps</h2><div class="group">${a.steps.map((s, k) => `
+      <div class="step"><select onchange="_act.a.steps[${k}].device=this.value.split('/')[0];_act.a.steps[${k}].command=this.value.split('/')[1]">${opts(s.device + '/' + s.command)}</select>
+        <input type="number" min="0" step="100" value="${s.delay}" title="pause after (ms)" oninput="_act.a.steps[${k}].delay=+this.value">
+        <button onclick="_act.a.steps.splice(${k},1);drawActivity()">✕</button></div>`).join('') || '<div class="step"><small class="muted">No steps yet</small></div>'}</div>
+    <p class="muted">The number is the pause after a step in milliseconds (devices often need 1–3 s after power on).</p>
+    <button class="wide" onclick="addStep()">Add Step</button>
+    <h2></h2><button class="primary wide" onclick="saveActivity()">Save</button>
+    ${i === undefined ? '' : `<h2></h2><button class="danger wide" onclick="delActivity()">Delete Activity</button>`}`);
+}
+function addStep() {
+  const d = db.devices.find(d => d.commands.length);
+  if (!d) { toast('Learn a command first'); return; }
+  _act.a.steps.push({ device: d.id, command: d.commands[0].id, delay: 500 }); drawActivity();
+}
+async function saveActivity() {
+  const { i, a } = _act; a.name = a.name.trim(); if (!a.name) return;
+  if (i === undefined) { a.id = uniq(a.name, db.activities); db.activities.push(a); } else db.activities[i] = a;
+  closeSheet(); await saveDb();
+}
+async function delActivity() { db.activities.splice(_act.i, 1); closeSheet(); await saveDb(); }
+
+// ---- live feed
+function addFeed(c) {
+  const f = $('#feed');
+  if (f.firstElementChild?.querySelector('small')?.textContent === 'Waiting for a code…') f.innerHTML = '';
+  const el = document.createElement('div');
+  el.className = 'item';
+  el.innerHTML = `<div class="icon" style="background:${c.kind === 'rf' ? '#ff9f0a' : '#0a84ff'}">${c.kind === 'rf' ? '433' : 'IR'}</div>
+    <div class="title"><b>${c.kind === 'rf' ? 'Radio' : (c.protocol === 'UNKNOWN' ? 'Infrared (raw)' : c.protocol)}</b><small class="code">${esc(codeText(c))}</small></div>
+    <button style="padding:6px 12px">Save</button>`;
+  el.querySelector('button').onclick = () => {
+    if (!db.devices.length) { toast('Add a device first'); return; }
+    openSheet(`<h3>Save to…</h3><div class="group">${db.devices.map((d, i) => `<div class="item noicon" onclick='learn(${i}, ${JSON.stringify(c).replace(/'/g, "&#39;")})'><div class="title"><b>${esc(d.name)}</b></div><span class="chev"></span></div>`).join('')}</div>`);
+  };
+  f.prepend(el);
+  while (f.children.length > 30) f.lastChild.remove();
+}
+
+// ---- settings
+function fillSettings() {
+  for (const k of ['name', 'mqttHost', 'mqttPort', 'mqttUser', 'ssid']) $('#s-' + k).value = status[k] ?? '';
+  $('#s-ip').value = status.ip || '';
+  $('#s-fw').value = status.fw || '';
+  $('#s-rssi').value = status.ap ? 'set-up access point' : (status.rssi + ' dBm');
+  $('#s-fs').value = `${Math.round(status.fsUsed / 1024)} of ${Math.round(status.fsTotal / 1024)} KB`;
+}
+async function saveSettings() {
+  const b = { name: $('#s-name').value, mqttHost: $('#s-mqttHost').value, mqttPort: +$('#s-mqttPort').value || 1883, mqttUser: $('#s-mqttUser').value };
+  if ($('#s-mqttPass').value) b.mqttPass = $('#s-mqttPass').value;
+  if ($('#s-ssid').value !== status.ssid || $('#s-pass').value) { b.ssid = $('#s-ssid').value; if ($('#s-pass').value) b.pass = $('#s-pass').value; }
+  await api('config', { method: 'POST', body: JSON.stringify(b) });
+  toast(b.ssid ? 'Saved – restarting' : 'Saved');
+  setTimeout(loadStatus, 2500);
+}
+function exportDb() {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' }));
+  a.download = 'ir-gateway-library.json'; a.click();
+}
+async function importDb(f) { if (!f) return; db = JSON.parse(await f.text()); await saveDb(); toast('Library imported'); }
+async function updateFw(f) {
+  if (!f) return; toast('Uploading firmware…');
+  const fd = new FormData(); fd.append('firmware', f);
+  const r = await fetch('/api/update', { method: 'POST', body: fd });
+  toast(r.ok ? 'Updated – restarting' : 'Update failed');
+}
+
+// ---- status & socket
+function showStatus() {
+  $('#gwname').textContent = status.name || 'IR Gateway';
+  const p = $('#mqttpill');
+  p.className = 'pill ' + (status.mqtt ? 'ok' : status.mqttHost ? 'warn' : '');
+  p.lastChild.textContent = status.mqtt ? 'Home Assistant' : status.mqttHost ? 'Connecting…' : 'Not linked';
+}
+async function loadStatus() { status = await api('status'); showStatus(); if ($('#tab-settings').classList.contains('on')) fillSettings(); }
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'status') { status = m; showStatus(); }
+    if (m.type === 'rx') {
+      addFeed(m.code);
+      if (learning && !learning.code) { learning.code = m.code; learnSheet(); }
+    }
+    if (m.type === 'db') api('db').then(d => { db = d; render(); });
+  };
+  ws.onclose = () => setTimeout(connect, 1500);
+}
+
+(async () => {
+  showTab(location.hash.slice(1) || 'devices');
+  try { db = await api('db'); } catch (e) {}
+  render(); loadStatus(); connect();
+  setInterval(loadStatus, 10000);
+})();
+</script>
+</body>
+</html>
