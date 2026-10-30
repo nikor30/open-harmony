@@ -83,7 +83,7 @@ static int rxlen;
 static char logbuf[24 * 1024];
 static int loglen;
 static char clock_text[8] = "";
-static int battery = -1;
+static int battery = -1;	/* level 0..8 (cache/batt_lvls.dat: mV thresholds for 1..8) */
 
 static char status_text[24] = "Ready";
 static unsigned status_color = C_TEXT2;
@@ -567,18 +567,14 @@ static void draw_status_bar(void)
 	dr_fill(0, 0, gfx_w - 1, STATUS_H - 1, C_BG, 256);
 	dr_text(&font_small_medium, M, 14, clock_text, 0, C_TEXT, 256);
 	if (battery >= 0) {
-		char pct[8];
-		int lvl = battery > 100 ? 100 : battery, fillw;
-		unsigned c = lvl <= 20 ? C_RED : lvl <= 35 ? C_YELLOW : C_TEXT;
-		cat(pct, catnum(pct, 0, lvl), "%");
+		int fillw = 18 * battery / 8;
+		unsigned c = battery <= 1 ? C_RED : battery <= 2 ? C_YELLOW : C_TEXT;
 		x = gfx_w - M - 24;
 		dr_rrect(x, 5, x + 21, 15, 3, C_TEXT, 100);		/* battery body */
 		dr_rrect(x + 1, 6, x + 20, 14, 2, C_BG, 256);
-		fillw = 18 * lvl / 100;
 		if (fillw > 0)
 			dr_rrect(x + 2, 7, x + 1 + fillw, 13, 2, c, 256);
 		dr_fill(x + 22, 8, x + 23, 12, C_TEXT, 100);		/* terminal */
-		dr_text(&font_caption, x - 4 - dr_text_width(&font_caption, pct, 0), 14, pct, 0, C_TEXT2, 256);
 	}
 }
 
@@ -982,34 +978,20 @@ static void send_event(const char *name, const char *ptag, const char *value)
 
 static int battery_logged;
 
+/* battery level 0..8 from env_mgr, as SysService.lua reads it. (data_srv
+ * does not answer GET /system/batterylevel; waiting for it blocked input.) */
 static void update_battery(void)
 {
-	static char buf[1024];
-	char v[8];
-	const char *b;
-	int n = 0, i, result = 0, level = -1;
+	int result = 0, level = 0;
 
-	b = http_get("/system/batterylevel", buf, sizeof(buf), &n);
-	if (b) {
-		copy_tag(v, sizeof(v), b, b + n, "<Value>", "</Value>");
-		if (battery_logged < 2) {
-			char t[100];
-			scopy(t, b, n + 1 < (int)sizeof(t) ? n + 1 : (int)sizeof(t));
-			logs("battery data_srv: ", t);
-		}
-		if (v[0] >= '0' && v[0] <= '9')
-			for (level = 0, i = 0; v[i] >= '0' && v[i] <= '9'; i++)
-				level = level * 10 + v[i] - '0';
+	env_get_battery_level(&result, &level);
+	level &= 0xffff;	/* only 16 bits are written */
+	if (battery_logged < 2) {
+		lognum("battery env result ", result);
+		lognum("battery env level ", level);
+		battery_logged++;
 	}
-	if (level < 0) {	/* ask env_mgr directly, as SysService.lua does */
-		env_get_battery_level(&result, &level);
-		if (battery_logged < 2) {
-			lognum("battery env result ", result);
-			lognum("battery env level ", level);
-		}
-	}
-	battery_logged++;
-	if (level >= 0)
+	if (result == 0 && level <= 8)
 		battery = level;
 }
 
