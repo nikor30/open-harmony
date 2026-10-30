@@ -306,8 +306,32 @@ region 12 in safe mode:
   Flash UI starts. All bars appeared in the right order and colours over
   the full 240x320 screen, and the UI started normally afterwards.
 
-So a native UI can draw with GF directly; together with the event
-protocol above it can replace Flash.
+- [`mods/h900-input`](../mods/h900-input): `ohinput` reads touch and keys
+  through GF's input API (`gfi_*`, `/dev/devi/ig1`), set up as
+  `flash-gf` does. Event layout (32 bytes): +0 type (1 touch, 2 key);
+  touch +8 x, +12 y in screen pixels (240x320, already calibrated),
+  +16 buttons (4 = pressed); key +12 sym, +16 cap, +20 scancode (bit 7 =
+  release), +24 flags (0xE0 = scan/sym/cap valid, bit 0 = down). One
+  press can arrive as two down events; ignore repeats until the release.
+- [`mods/h900-keymap`](../mods/h900-keymap): `ohkeys` asks for each key
+  by name in a 5x7 font
+  ([`tools/qnx/include/ohgfx.h`](../tools/qnx/include/ohgfx.h)) and
+  writes the scancodes to a file. Result:
+  [`tools/qnx/include/h900keys.h`](../tools/qnx/include/h900keys.h). The
+  D-pad uses PC numeric-keypad codes (up 0x48, left 0x4B, OK 0x4C, right
+  0x4D, down 0x50); the other keys are not PC-like.
+
+So a native UI can draw with GF directly and read touch and keys;
+together with the event protocol above it can replace Flash.
+
+### Log channel
+
+Region 12 is mounted at `/usr/local` and its `cache/` directory
+(`CACHEHOME=/usr/local/cache`) is writable at run time (`data_srv` keeps
+its settings there). `/usr/local` itself is not writable. A file that a
+program writes to `/usr/local/cache/` comes back with the next
+`zregion 12` (or the before-copy of `zwrite`) in safe mode, so native test
+programs can report results without a photo.
 
 ### Hardware variants
 

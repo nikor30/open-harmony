@@ -6,8 +6,16 @@
 #define NULL ((void *)0)
 
 int usleep(unsigned int usec);
+int creat(const char *path, int mode);
+int write(int fd, const void *buf, unsigned n);
+int close(int fd);
 unsigned int sleep(unsigned int sec);
 unsigned int alarm(unsigned int sec);
+void _exit(int status) __attribute__((noreturn));
+void (*signal(int sig, void (*func)(int)))(int);
+#define SIGILL	4
+#define SIGBUS	10
+#define SIGSEGV	11
 void exit(int status) __attribute__((noreturn));
 
 /* libcdf_client.so (env_mgr client), signatures from the tolua wrappers
@@ -43,5 +51,22 @@ void gf_context_set_fgcolor(gf_context_t ctx, unsigned rgb);	/* 0xRRGGBB */
 int gf_draw_begin(gf_context_t ctx);
 void gf_draw_rect(gf_context_t ctx, int x1, int y1, int x2, int y2);
 void gf_draw_end(gf_context_t ctx);
+
+/* GF input (also libgf.so.1), as used by flash-gf's input thread.
+ * Events are 32 bytes: +0 type (1 pointer/touch, 2 key); pointer: +8 x,
+ * +12 y, +16 buttons (4 = pressed); key: +24 flags. */
+typedef void *gfi_group_t;	/* handle holding the fd of /dev/devi/ig<n> */
+typedef void *gfi_layer_t;
+
+#define GFI_EV_POINTER	1
+#define GFI_EV_KEY	2
+#define GFI_NONBLOCK	1	/* get_event returns 35 (EAGAIN) if empty */
+
+int gfi_group_attach(gfi_group_t *grp, int index, unsigned flags);	/* opens /dev/devi/ig<index> */
+int gfi_layer_attach(gfi_layer_t *layer, gfi_group_t grp, unsigned flags, int layer_index);
+int gfi_layer_set_attrs(gfi_layer_t layer, int x1, int y1, int x2, int y2, unsigned flags);
+int gfi_set_keyboard_focus(gfi_group_t grp, int layer_index);
+/* layers is an array of n handles (flash-gf passes &layer, 1) */
+int gfi_layer_get_event(gfi_layer_t *layers, int n, void *ev, int flags);
 
 #endif
