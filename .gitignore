@@ -1,6 +1,6 @@
 backup/
 local/
-src/
+/src/
 identity.txt
 CLAUDE.local.md
 *.EZHex
