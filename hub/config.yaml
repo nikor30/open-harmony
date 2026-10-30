@@ -1,5 +1,5 @@
 name: open-harmony Hub
-version: "0.1.0"
+version: "0.1.1"
 slug: open_harmony_hub
 description: Activities across IR/433 MHz gateways and Home Assistant, for the open-harmony remotes
 url: https://github.com/nikor30/open-harmony/tree/main/hub
