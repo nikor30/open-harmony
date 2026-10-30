@@ -22,6 +22,7 @@
 #include <LittleFS.h>
 #include <Preferences.h>
 #include <Update.h>
+#include <ArduinoOTA.h>
 #include <ArduinoJson.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
@@ -40,6 +41,9 @@
 #ifndef WIFI_SSID
 #define WIFI_SSID ""
 #define WIFI_PASS ""
+#endif
+#ifndef OTA_PASS
+#define OTA_PASS ""  // no password: updates open to the network
 #endif
 #ifndef FW_VERSION
 #define FW_VERSION "dev"
@@ -573,16 +577,30 @@ static void setupWeb() {
         req->send(200, "application/json", "{}");
       },
       nullptr, onBody);
-  // firmware update over the network: POST the .bin as multipart "firmware"
+  // firmware update over the network: POST the .bin as multipart "firmware",
+  // with the update password in the header X-Update-Password
   server.on(
       "/api/update", HTTP_POST,
       [](AsyncWebServerRequest *req) {
+        if (req->_tempObject) {  // refused in the upload handler
+          req->_tempObject = nullptr;
+          req->send(403, "application/json", "{\"ok\":false,\"error\":\"password\"}");
+          return;
+        }
         bool ok = !Update.hasError();
         req->send(ok ? 200 : 500, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
         if (ok) restartPending = true;
       },
       [](AsyncWebServerRequest *req, const String &, size_t index, uint8_t *data, size_t len, bool final) {
-        if (index == 0) Update.begin(UPDATE_SIZE_UNKNOWN);
+        if (index == 0) {
+          const AsyncWebHeader *h = req->getHeader("X-Update-Password");
+          if (strlen(OTA_PASS) && (!h || h->value() != OTA_PASS)) {
+            req->_tempObject = (void *)1;
+            return;
+          }
+          Update.begin(UPDATE_SIZE_UNKNOWN);
+        }
+        if (req->_tempObject) return;
         if (len) Update.write(data, len);
         if (final) Update.end(true);
       });
@@ -615,7 +633,10 @@ static void startWifi() {
     WiFi.mode(WIFI_AP);
     WiFi.softAP("IR-Gateway-Setup");
   }
-  MDNS.begin("ir-gateway");
+  ArduinoOTA.setHostname("ir-gateway");  // also announces itself over mDNS
+  if (strlen(OTA_PASS)) ArduinoOTA.setPassword(OTA_PASS);
+  ArduinoOTA.onStart([]() { irrecv.disableIRIn(); });
+  ArduinoOTA.begin();
   MDNS.addService("http", "tcp", 80);
 }
 
@@ -677,6 +698,7 @@ void loop() {
   }
   runQueue();
   mqttLoop();
+  ArduinoOTA.handle();
   ws.cleanupClients();
   if (restartPending) {
     delay(300);

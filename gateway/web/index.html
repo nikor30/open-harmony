@@ -365,10 +365,13 @@ function exportDb() {
 }
 async function importDb(f) { if (!f) return; db = JSON.parse(await f.text()); await saveDb(); toast('Library imported'); }
 async function updateFw(f) {
-  if (!f) return; toast('Uploading firmware…');
+  if (!f) return;
+  const pw = prompt('Update password'); if (pw === null) return;
+  toast('Uploading firmware…');
   const fd = new FormData(); fd.append('firmware', f);
-  const r = await fetch('/api/update', { method: 'POST', body: fd });
-  toast(r.ok ? 'Updated – restarting' : 'Update failed');
+  const r = await fetch('/api/update', { method: 'POST', body: fd, headers: { 'X-Update-Password': pw } });
+  toast(r.ok ? 'Updated – restarting' : r.status === 403 ? 'Wrong password' : 'Update failed');
+  document.getElementById('fw').value = '';
 }
 
 // ---- status & socket

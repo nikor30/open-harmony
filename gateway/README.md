@@ -37,8 +37,13 @@ protocols (air conditioners) with `"state":"<hex>"`, or
 ```bash
 pio run                          # build (web/index.html is embedded by tools/embed_web.py)
 pio run -t upload                # first time over USB (CH340, resets the board)
-curl -F firmware=@.pio/build/kc868ag/firmware.bin http://ir-gateway.local/api/update   # later, over Wi-Fi
+tools/ota_upload.sh              # later, over Wi-Fi: POST /api/update with the password
 ```
+
+Updates need the password `OTA_PASS` from `secrets.h` (header
+`X-Update-Password`; the web UI asks for it). `pio run -e ota -t upload`
+(ArduinoOTA/espota) also works where the PC accepts the board's connection
+back; with an inbound-blocking firewall use `tools/ota_upload.sh`.
 
 `secrets.h` (git-ignored) may define `WIFI_SSID`/`WIFI_PASS` for the first
 start; without Wi-Fi the gateway opens the access point `IR-Gateway-Setup`
