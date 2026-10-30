@@ -292,6 +292,23 @@ test this can even be done without a compiler, by sending these events
 over the USB network once something forwards port 1100 (the services only
 listen on `127.0.0.1`).
 
+### Native programs (done)
+
+Programs we build ourselves run on the 900, without the QNX SDK; see
+[`tools/qnx`](../tools/qnx/README.md). Tested in normal mode after writing
+region 12 in safe mode:
+
+- [`mods/h900-nativetest`](../mods/h900-nativetest): `ohtest` switches the
+  backlight through `env_mgr` (`libcdf_client.so`), started from
+  `flash.sh`.
+- [`mods/h900-colorbars`](../mods/h900-colorbars): `ohbars` draws eight
+  full-screen colour bars through GF (`libgf.so.1`) for 4 s before the
+  Flash UI starts. All bars appeared in the right order and colours over
+  the full 240x320 screen, and the UI started normally afterwards.
+
+So a native UI can draw with GF directly; together with the event
+protocol above it can replace Flash.
+
 ### Hardware variants
 
 `display.conf` and `rc.platform` select between three product variants by a
