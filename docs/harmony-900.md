@@ -237,6 +237,61 @@ region 12 in safe mode with `zwrite` (read-back identical); after a normal
 boot the remote blinks at start and on every wake-up and otherwise works
 as before. So modified Lua in region 12 runs on the remote.
 
+### How the UI talks to the logic
+
+Flash only draws and handles input; everything else runs in separate
+processes that it reaches over local TCP. A native GUI has to replace
+exactly these connections:
+
+```
+devi-imx21s (keys, touch) --> flash-gf (main.swf, app-main.swf) --> GF/io-display --> LCD
+                                 |  XMLSocket :1100            |  XMLSocket :1600 + HTTP :80
+                                 v                              v
+                     hao (C host + HAO.lua)          data_srv (key-value store)
+                     activities, IR, RF, Help          /system/*, /userconfig, /actionlist
+                                 |                              ^
+                                 v                              |
+                       ir_mgr/irgen, rfgen-*        sys_srv (C host + SysService.lua)
+                                                    backlight, sleep, battery, timers
+```
+
+- **Input**: `rc.gf` starts `devi-imx21s -P -r kpp_vodka -f
+  keymap_vodka.conf keyboard ... touch_vodka abs -s239,319`, the QNX input
+  driver in resource-manager mode, with a scancode table for the hard keys
+  and a calibrated touchscreen. Flash reads these as key and mouse events.
+- **Output**: `flash-gf` is a plain QNX GF client (`gf_dev_attach`,
+  `gf_display_attach`, `gf_draw_bitmap`/`blit2`, ...) on `libgf.so.1`, with
+  `io-display` and `devg-imx21_logitech.so` from the boot image.
+- **Commands to hao** (`HAOSocketSender` in `app-main.swf`, XMLSocket to
+  `127.0.0.1:1100`, `haoServerPort`): one XML event per message, e.g.
+  `<Event><Payload><Name>StartActivity</Name><Params><Id>…</Id></Params></Payload></Event>`.
+  `hao` passes it to `handleEventXML()` in `HAO.lua`, which knows `SendIR`
+  (`ActionId`), `SendChannel`, `SendNumber`, `Synchronize`,
+  `StartActivity`, `StopActivity`, `RestoreActivity`, `Help`,
+  `SendCommand`, `ForwardAction`, `RemoteTest`, `ManualPowerQuery`,
+  `RemoteInfoQuery`, `PowerOffDevicesQuery`, `deviceDelay` and the `RF:*`
+  events. Replies (`DeviceAssignmentInfo`, `RemoteInfo`,
+  `ManualPowerResponse`, ...) come back on the same socket.
+- **System state** (`DSSocketSender`, XMLSocket to `data_srv`,
+  `dataServerPort` 1600, plus HTTP GET/POST on port 80 via `LoadVars`):
+  `data_srv` is a key-value store (`/dev/ds`) for `/system/*` values
+  (battery, time, backlight, sleep, sound, theme, ...). Each change is
+  pushed to subscribers as
+  `<Event><Payload><Name>/system/…</Name><Value>…</Value></Payload></Event>`;
+  that is how `sys_srv` (`handleDataNotifyEvent`) and the UI learn of
+  each other's changes. `notify_mgr` feeds hardware events (keypad,
+  touch, battery, cradle, USB, timers) to `sys_srv` (`notifyPort` 6970).
+- **Configuration**: the UI loads `http://127.0.0.1/userconfig` (devices,
+  activities, button labels) like `HAO.lua` does; `SendIR` refers to the
+  ActionIds from `/actionlist`.
+
+So a native GUI does not need to reimplement any IR, RF or activity
+logic: it reads `/userconfig`, draws with GF, reads `/dev/devi`, and
+sends the same XML events to port 1100 that Flash sends today. As a first
+test this can even be done without a compiler, by sending these events
+over the USB network once something forwards port 1100 (the services only
+listen on `127.0.0.1`).
+
 ### Hardware variants
 
 `display.conf` and `rc.platform` select between three product variants by a
