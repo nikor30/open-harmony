@@ -9,6 +9,28 @@ int usleep(unsigned int usec);
 int creat(const char *path, int mode);
 int write(int fd, const void *buf, unsigned n);
 int close(int fd);
+int read(int fd, void *buf, unsigned n);
+
+/* select(): fd_set is a bit array of 32-bit words; timeval = {sec, usec} */
+struct timeval { long tv_sec; long tv_usec; };
+int select(int nfds, unsigned *readfds, unsigned *writefds, unsigned *exceptfds,
+		struct timeval *timeout);
+
+/* libsocket.so.2, BSD layout (as sys_srv uses it): addrinfo +4 family,
+ * +8 socktype, +12 protocol, +16 addrlen, +20 canonname, +24 addr, +28 next */
+struct addrinfo {
+	int ai_flags, ai_family, ai_socktype, ai_protocol;
+	unsigned ai_addrlen;
+	char *ai_canonname;
+	void *ai_addr;
+	struct addrinfo *ai_next;
+};
+#define SOCK_STREAM	1
+int getaddrinfo(const char *host, const char *service, const struct addrinfo *hints,
+		struct addrinfo **res);
+void freeaddrinfo(struct addrinfo *ai);
+int socket(int domain, int type, int protocol);
+int connect(int fd, const void *addr, unsigned addrlen);
 unsigned int sleep(unsigned int sec);
 unsigned int alarm(unsigned int sec);
 void _exit(int status) __attribute__((noreturn));

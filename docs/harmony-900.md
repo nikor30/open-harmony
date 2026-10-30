@@ -321,8 +321,17 @@ region 12 in safe mode:
   D-pad uses PC numeric-keypad codes (up 0x48, left 0x4B, OK 0x4C, right
   0x4D, down 0x50); the other keys are not PC-like.
 
-So a native UI can draw with GF directly and read touch and keys;
-together with the event protocol above it can replace Flash.
+- [`mods/h900-hao`](../mods/h900-hao): `ohhao` loads the activities from
+  `GET /userconfig` and sends `StartActivity` to `hao`; hao answers with
+  `ActivityDeviceList` and `Queue` events (per device Doing/Done, `Send`
+  IR/RF/Done) and `ReceiverLinkDown` when the RF blaster is not reachable.
+- [`mods/h900-ui`](../mods/h900-ui): `ohui`, a first native UI in front
+  of Flash: activity list, soft buttons and hard keys per activity
+  (`SendIR` with the ActionIds from the activity's `HardButtons` and
+  `Misc` control groups), Flash as fallback.
+
+So a native UI can draw with GF directly, read touch and keys and drive
+`hao` like the Flash UI does.
 
 ### Log channel
 

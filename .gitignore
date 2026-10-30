@@ -12,3 +12,5 @@ mods/h900-nativetest/ohtest
 mods/h900-colorbars/ohbars
 mods/h900-input/ohinput
 mods/h900-keymap/ohkeys
+mods/h900-hao/ohhao
+mods/h900-ui/ohui

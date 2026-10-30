@@ -1,6 +1,6 @@
 /* Shared GF helpers for native Harmony 900 programs: screen setup, filled
- * rectangles and a 5x7 font (space, digits, A-Z, + - < > ^ : / .), drawn
- * at an integer scale. Include once per program; link the gf_* names
+ * rectangles and a 5x7 font (space, digits, A-Z, + - < > ^ : / . ? & ( ) _ !,
+ * UTF-8 umlauts shown as their base letter), drawn at an integer scale. Include once per program; link the gf_* names
  * listed in OHGFX_LIBGF with qnxcc.py. */
 #ifndef OHGFX_H
 #define OHGFX_H
@@ -77,6 +77,8 @@ static const struct { char c; unsigned char g[7]; } gfx_symbols[] = {
 	{'+', {0,4,4,31,4,4,0}}, {'-', {0,0,0,31,0,0,0}}, {'<', {2,4,8,16,8,4,2}},
 	{'>', {8,4,2,1,2,4,8}}, {'^', {4,10,17,0,0,0,0}}, {':', {0,12,12,0,12,12,0}},
 	{'/', {1,1,2,4,8,16,16}}, {'.', {0,0,0,0,0,12,12}},
+	{'?', {14,17,1,2,4,0,4}}, {'&', {12,18,20,8,21,18,13}}, {'(', {2,4,8,8,8,4,2}},
+	{')', {8,4,2,2,2,4,8}}, {'_', {0,0,0,0,0,0,31}}, {'!', {4,4,4,4,4,0,4}},
 };
 
 static const unsigned char *gfx_glyph(int c)
@@ -95,13 +97,32 @@ static const unsigned char *gfx_glyph(int c)
 	return NULL;	/* space and unknown: blank */
 }
 
+/* UTF-8 German letters to their base letter (Ä->A, ß->S), else 0 */
+static int gfx_utf8_base(unsigned char c)
+{
+	switch (c) {
+	case 0x84: case 0xa4: return 'A';
+	case 0x96: case 0xb6: return 'O';
+	case 0x9c: case 0xbc: return 'U';
+	case 0x9f: return 'S';
+	}
+	return 0;
+}
+
 /* Draw text at scale s (cell 6s x 8s); bg ~0 = transparent. Returns end x. */
 static int gfx_text(int x, int y, const char *str, int s, unsigned fg, unsigned bg)
 {
 	int r, c;
 
 	for (; *str; str++, x += 6 * s) {
-		const unsigned char *g = gfx_glyph(*str);
+		int ch = (unsigned char)*str;
+		const unsigned char *g;
+		if (ch == 0xc3 && str[1]) {
+			ch = gfx_utf8_base((unsigned char)*++str);
+			if (!ch)
+				ch = '?';
+		}
+		g = gfx_glyph(ch);
 		if (bg != ~0u)
 			gfx_rect(x, y, x + 6 * s - 1, y + 8 * s - 1, bg);
 		if (!g)
@@ -115,7 +136,7 @@ static int gfx_text(int x, int y, const char *str, int s, unsigned fg, unsigned 
 }
 
 /* n hex digits of v into buf (no terminator) */
-static void gfx_hex(char *buf, unsigned v, int n)
+static __attribute__((unused)) void gfx_hex(char *buf, unsigned v, int n)
 {
 	int k;
 
