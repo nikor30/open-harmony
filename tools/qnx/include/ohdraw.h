@@ -199,6 +199,65 @@ static void dr_rrect(int x1, int y1, int x2, int y2, int r, unsigned c, int a)
 	}
 }
 
+/* ---- vector shapes for icons: 4x4 supersampled, coordinates in px ---- */
+
+static void dr_circle(int cx, int cy, int r, unsigned c, int a)
+{
+	dr_rrect(cx - r, cy - r, cx + r - 1, cy + r - 1, r, c, a);
+}
+
+/* thick line from (x1,y1) to (x2,y2), width w, round caps */
+static void dr_line(int x1, int y1, int x2, int y2, int w, unsigned c, int a)
+{
+	int bx1 = (x1 < x2 ? x1 : x2) - w, bx2 = (x1 > x2 ? x1 : x2) + w;
+	int by1 = (y1 < y2 ? y1 : y2) - w, by2 = (y1 > y2 ? y1 : y2) + w;
+	int dx = (x2 - x1) * 8, dy = (y2 - y1) * 8, len2 = dx * dx + dy * dy;
+	int r2 = w * w * 16;		/* (w/2 * 8)^2 */
+	int x, y, sx, sy;
+
+	for (y = by1; y <= by2; y++)
+		for (x = bx1; x <= bx2; x++) {
+			int n = 0;
+			for (sy = 0; sy < 4; sy++)
+				for (sx = 0; sx < 4; sx++) {
+					int px = (x - x1) * 8 + sx * 2 + 1, py = (y - y1) * 8 + sy * 2 + 1;
+					int t = len2 ? (px * dx + py * dy) : 0, ex, ey;
+					if (t < 0) t = 0;
+					if (t > len2) t = len2;
+					ex = px - (len2 ? dx * t / len2 : 0);
+					ey = py - (len2 ? dy * t / len2 : 0);
+					if (ex * ex + ey * ey <= r2)
+						n++;
+				}
+			if (n)
+				dr_pixel(x, y, c, n * a >> 4);
+		}
+}
+
+/* ring between radii r_in and r_out; gap > 0 leaves an opening of that
+ * half-width at the top (power symbol) */
+static void dr_ring(int cx, int cy, int r_out, int r_in, int gap, unsigned c, int a)
+{
+	int x, y, sx, sy, R = r_out * 8, Ri = r_in * 8;
+
+	for (y = cy - r_out; y <= cy + r_out; y++)
+		for (x = cx - r_out; x <= cx + r_out; x++) {
+			int n = 0;
+			for (sy = 0; sy < 4; sy++)
+				for (sx = 0; sx < 4; sx++) {
+					int px = (x - cx) * 8 + sx * 2 + 1 - 4, py = (y - cy) * 8 + sy * 2 + 1 - 4;
+					int d = px * px + py * py;
+					if (d > R * R || d < Ri * Ri)
+						continue;
+					if (gap && py < 0 && px > -gap * 8 && px < gap * 8)
+						continue;
+					n++;
+				}
+			if (n)
+				dr_pixel(x, y, c, n * a >> 4);
+		}
+}
+
 /* soft drop shadow under a rounded rectangle */
 static __attribute__((unused)) void dr_shadow(int x1, int y1, int x2, int y2, int r, int dy, int strength)
 {
@@ -288,13 +347,14 @@ static void dr_text_fit(const struct ohfont *f, int x, int y, const char *s, int
 
 struct spring { int x, v, target; };
 
-/* response ~0.35 s: omega = 2*pi/0.35 ~ 18, k = omega^2 ~ 322, c = 2*omega ~ 36 */
-static int spring_step(struct spring *s)
+/* response ~0.35 s: omega = 2*pi/0.35 ~ 18, k = omega^2 ~ 322, c = 2*omega ~ 36;
+ * hz = steps per second (50 for 20 ms steps) */
+static int spring_step_hz(struct spring *s, int hz)
 {
 	int d = s->x - s->target;
 
-	s->v += (-322 * d - 36 * s->v) / 50;
-	s->x += s->v / 50;
+	s->v += (-322 * d - 36 * s->v) / hz;
+	s->x += s->v / hz;
 	d = s->x - s->target;
 	if (d > -64 && d < 64 && s->v > -512 && s->v < 512) {
 		s->x = s->target;
@@ -302,6 +362,11 @@ static int spring_step(struct spring *s)
 		return 0;	/* settled */
 	}
 	return 1;
+}
+
+static __attribute__((unused)) int spring_step(struct spring *s)
+{
+	return spring_step_hz(s, 50);
 }
 
 #endif

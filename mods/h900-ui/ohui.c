@@ -3,30 +3,44 @@
  * Reads activities and devices from data_srv (GET /userconfig) and talks to
  * hao on 127.0.0.1:1100 like the Flash UI does (XML events terminated by a
  * zero byte):
- *   StartActivity <Id>   activity cards and power off (Id -1)
- *   SendIR <ActionId>    hard keys (activity "HardButtons", or on a device
- *                        screen the device's own commands), soft buttons
- *                        ("Misc" control groups of activities and devices)
+ *   StartActivity <Id>    activity cards and power off (Id -1)
+ *   SendIR <ActionId>     hard keys (activity "HardButtons", or on a device
+ *                         screen the device's own commands), soft buttons
  *   SendChannel <Channel> favourite channels of an activity
  * hao's Queue/ReceiverLinkDown replies drive the status pill.
  *
  * Screens form a stack (Activities > activity, Activities > Devices >
- * device) that slides with a critically damped spring; swiping from the
- * left edge drags the screen back 1:1 and the release velocity is
- * projected to decide between going back and staying. Lists scroll 1:1
- * with momentum and rubber-banding. Touch feedback appears on touch-down,
- * a tap commits on release. Input is handled before drawing, and frames are
- * drawn at most every 33 ms unless something moves.
+ * device, Activities > Settings) that slides with a critically damped
+ * spring; a swipe from the left edge drags back 1:1 and projects the
+ * release velocity. Lists scroll 1:1 with momentum and rubber-banding; the
+ * scroll indicator flashes when a screen opens and edges fade where more
+ * content is. In scrollable lists a button lights up only after 90 ms
+ * without movement (like iOS), so scrolling never flashes or fires it.
  *
- * "Classic UI" (end of the Activities list) ends ohui; flash.sh then starts
- * the Flash player, as it does if ohui fails. Log: /usr/local/cache/ohui.log. */
+ * Hardware: the LEDs behind the four soft buttons show what they do now
+ * (under-left white = back, under-right orange = open the running activity,
+ * side arrows white = page up/down possible), set through data_srv like the
+ * Flash UI does (/system/leftbottombutton etc., 0 off, 1 white, 2 orange).
+ * Charging comes from env_get_charger_state, the battery level (0..8) from
+ * env_get_battery_level. With sounds on (/system/sound), the buzzer ticks
+ * when a tap commits, chimes when an activity is ready and buzzes low on
+ * errors (audio_buzzer_generate_sound(0, Hz, ms)).
+ *
+ * Settings: brightness (live while dragging, saved on release), display
+ * timeout, sounds; values are read from data_srv's cache files and written
+ * back with POST /system/<name> (plain text, as sys_srv does).
+ *
+ * "Classic UI" ends ohui; flash.sh then starts the Flash player, as it does
+ * if ohui fails. Log: /usr/local/cache/ohui.log. */
 #include <ohdraw.h>
 
-#define POLL_MS		15
+#define VERSION		"6"
+#define POLL_MS		10
 #define FRAME_MS	33
 #define REPEAT_DELAY	400
 #define REPEAT_MS	150
-#define SLOP		10
+#define SLOP		6
+#define TAP_DELAY	90		/* ms before a press shows in a scrollable list */
 #define EDGE		22
 #define MAXACT		6
 #define MAXHARD		48
@@ -41,6 +55,7 @@
 #define C_CARD_HI	0x3a3a3c
 #define C_TILE		0x262628
 #define C_TILE_HI	0x48484a
+#define C_SEP		0x38383a
 #define C_TEXT		0xffffff
 #define C_TEXT2		0x8e8e93
 #define C_TEXT3		0x636366
@@ -84,30 +99,53 @@ static char logbuf[24 * 1024];
 static int loglen;
 static char clock_text[8] = "";
 static int battery = -1;	/* level 0..8 (cache/batt_lvls.dat: mV thresholds for 1..8) */
+static int charging;
+static long now;		/* ms, updated every loop */
 
 static char status_text[24] = "Ready";
 static unsigned status_color = C_TEXT2;
 
+/* settings */
+static int set_brightness = 60;		/* 0..100, /system/backlightlevel */
+static int set_timeout = 30;		/* s, /system/backlighttimeout */
+static int set_sound = 0;		/* /system/sound */
+static const int timeouts[] = { 10, 30, 60, 120, 300 };
+static const char *const timeout_labels[] = { "10s", "30s", "1m", "2m", "5m" };
+#define NTIMEOUT 5
+static struct spring seg_spring;	/* x of the selected segment, 1/256 px */
+static struct spring sw_spring;		/* sound switch knob 0..256*256 */
+
 /* ---- screens ---- */
 
-enum { S_HOME, S_ACT, S_DEVICES, S_DEVICE };
+enum { S_HOME, S_ACT, S_DEVICES, S_DEVICE, S_SETTINGS };
 struct screen {
 	int kind, index;
 	int sy, sv;		/* scroll offset and velocity, 1/256 px and 1/256 px/s */
 	int content_h;		/* set when drawn */
+	long shown;		/* when the screen was pushed (scroll indicator flash) */
 };
 static struct screen stack[4];
 static int depth;		/* index of the top screen */
 static struct spring nav;	/* depth * gfx_w * 256 when settled */
 
 /* touch */
-enum { T_NONE, T_ACT, T_POWER, T_CLASSIC, T_BACK, T_SOFT, T_CHAN, T_DEVICES, T_DEV, T_CMD };
-enum { G_NONE, G_TAP, G_SCROLL, G_EDGE };
+enum { T_NONE, T_ACT, T_POWER, T_CLASSIC, T_BACK, T_SOFT, T_CHAN, T_DEVICES, T_DEV, T_CMD,
+       T_SETTINGS, T_SLIDER, T_SEG, T_SOUND };
+enum { G_NONE, G_TAP, G_SCROLL, G_EDGE, G_SLIDER };
 static int press_kind = T_NONE, press_index;
+static long press_t;		/* when the press may show */
 static int gesture = G_NONE;
-static int g_x0, g_y0, g_sy0;
-static int g_lx, g_ly, g_vx, g_vy;	/* last point and velocity, px/s */
-static long g_lt;
+static int g_x0, g_y0, g_sy0, g_grab;
+#define NHIST 6
+static int h_x[NHIST], h_y[NHIST], h_n;
+static long h_t[NHIST];
+
+/* LEDs behind the soft buttons */
+enum { LED_LEFT, LED_RIGHT, LED_UNDER_L, LED_UNDER_R };
+static const char *const led_path[] = {
+	"/system/leftarrow", "/system/rightarrow", "/system/leftbottombutton", "/system/rightbottombutton"
+};
+static int led_state[4] = { -1, -1, -1, -1 };
 
 /* scancode -> Logitech button name */
 static const struct { unsigned char scan; const char *name; char repeat; } keymap[] = {
@@ -136,7 +174,10 @@ static const struct { const char *from, *to; } aliases[] = {
 };
 #define SCAN_ACTIVITIES	0x41
 #define SCAN_OFF	0x22
+#define SCAN_SIDE_L	0x02
+#define SCAN_SIDE_R	0x0D
 #define SCAN_UNDER_L	0x1B
+#define SCAN_UNDER_R	0x1C
 
 /* ---- small string helpers ---- */
 
@@ -215,6 +256,17 @@ static int catnum(char *dst, int k, int v)
 	return k;
 }
 
+static int atoi_s(const char *s)
+{
+	int v = 0;
+
+	while (*s == ' ')
+		s++;
+	while (*s >= '0' && *s <= '9')
+		v = v * 10 + *s++ - '0';
+	return v;
+}
+
 #ifndef OHUI_HOST
 static void logs(const char *a, const char *b)
 {
@@ -254,7 +306,7 @@ static void logs(const char *a, const char *b) { (void)a; (void)b; }
 
 /* ---- config ---- */
 
-/* buttons of the "Misc" control group, or of all groups (group NULL) */
+/* buttons of one control group (group tag), or of all groups (group NULL) */
 static void parse_cmds(struct cmd *c, int *n, int max, const char *s, const char *end,
 		       const char *group)
 {
@@ -286,9 +338,7 @@ static void parse_cmds(struct cmd *c, int *n, int max, const char *s, const char
 			}
 		copy_tag(x->action, sizeof(x->action), b, be, "<ActionId>", "</ActionId>");
 		copy_tag(pos, sizeof(pos), b, be, "<Position>", "</Position>");
-		x->pos = 0;
-		for (k = 0; pos[k] >= '0' && pos[k] <= '9'; k++)
-			x->pos = x->pos * 10 + pos[k] - '0';
+		x->pos = atoi_s(pos);
 		if (x->action[0])
 			(*n)++;
 	}
@@ -449,6 +499,7 @@ static unsigned device_tint(const struct device *d)
 #define POWER_H		40
 #define CARD_H		54
 #define CARD_STEP	62
+#define ROW_H		44
 #define TILE_W		((gfx_w - 2 * M - 8) / 2)
 #define TILE_H		38
 #define TILE_STEP	44
@@ -461,11 +512,21 @@ static int content_bottom(const struct screen *s) { return has_power_bar(s) ? PO
 /* home content */
 #define H_TITLE		36
 #define H_CARD(i)	(52 + (i) * CARD_STEP)
+#define H_MORE		(H_CARD(n_activities()) + 18)	/* section label baseline */
+#define H_ROW(i)	(H_MORE + 8 + (i) * ROW_H)
 /* activity / device content */
 #define A_TITLE		30
 #define A_SECTION1	46
 #define A_TILE_Y(i)	(56 + ((i) >> 1) * TILE_STEP)
 #define TILE_X(i)	(M + ((i) & 1) * (TILE_W + 8))
+/* settings content */
+#define ST_BRIGHT	54		/* card top */
+#define ST_SLIDER_Y	(ST_BRIGHT + 48)
+#define ST_SEG		146
+#define ST_SOUND	204
+#define ST_ABOUT	266
+#define SL_X1		(M + 16)
+#define SL_X2		(gfx_w - M - 17)
 
 static int tiles_end(int n) { return n ? A_TILE_Y(n - 1) + TILE_H : 40; }
 
@@ -478,6 +539,12 @@ static int scroll_max(const struct screen *s)
 static int in(int x, int y, int x1, int y1, int x2, int y2, int slop)
 {
 	return x >= x1 - slop && x <= x2 + slop && y >= y1 - slop && y <= y2 + slop;
+}
+
+static int seg_x(int i)
+{
+	int w = (gfx_w - 2 * M - 4) / NTIMEOUT;
+	return M + 2 + i * w;
 }
 
 /* control under screen point (x, y) on the top screen */
@@ -503,14 +570,17 @@ static void hit(int x, int y, int slop, int *kind, int *index)
 	switch (s->kind) {
 	case S_HOME:
 		n = n_activities();
-		for (i = 0; i <= n; i++)
+		for (i = 0; i < n; i++)
 			if (in(x, cy, M, H_CARD(i), gfx_w - M, H_CARD(i) + CARD_H - 1, slop)) {
-				*kind = i < n ? T_ACT : T_DEVICES;
+				*kind = T_ACT;
 				*index = i;
 				return;
 			}
-		if (in(x, cy, M, H_CARD(n + 1), gfx_w - M, H_CARD(n + 1) + 40, slop))
-			*kind = T_CLASSIC;
+		for (i = 0; i < 3; i++)
+			if (in(x, cy, M, H_ROW(i), gfx_w - M, H_ROW(i) + ROW_H - 1, slop > 4 ? 4 : slop)) {
+				*kind = i == 0 ? T_DEVICES : i == 1 ? T_SETTINGS : T_CLASSIC;
+				return;
+			}
 		return;
 	case S_ACT: {
 		struct activity *a = &act[s->index];
@@ -550,6 +620,20 @@ static void hit(int x, int y, int slop, int *kind, int *index)
 			}
 		return;
 	}
+	case S_SETTINGS:
+		if (in(x, cy, M, ST_SLIDER_Y - 14, gfx_w - M, ST_SLIDER_Y + 14, slop)) {
+			*kind = T_SLIDER;
+			return;
+		}
+		for (i = 0; i < NTIMEOUT; i++)
+			if (in(x, cy, seg_x(i), ST_SEG, seg_x(i + 1) - 1, ST_SEG + 31, 0)) {
+				*kind = T_SEG;
+				*index = i;
+				return;
+			}
+		if (in(x, cy, M, ST_SOUND, gfx_w - M, ST_SOUND + ROW_H - 1, slop))
+			*kind = T_SOUND;
+		return;
 	}
 }
 
@@ -557,39 +641,88 @@ static void hit(int x, int y, int slop, int *kind, int *index)
 
 static int pressed(int kind, int index)
 {
-	return press_kind == kind && press_index == index && gesture == G_TAP;
+	return press_kind == kind && press_index == index && gesture == G_TAP && now >= press_t;
+}
+
+/* ---- icons, drawn from shapes (centre cx, cy) ---- */
+
+static void icon_power(int cx, int cy, unsigned c, int a)
+{
+	dr_ring(cx, cy, 8, 6, 3, c, a);
+	dr_line(cx, cy - 9, cx, cy - 2, 2, c, a);
+}
+
+static void icon_gear(int cx, int cy, unsigned c, int a)
+{
+	static const signed char tx[8] = { 0, 7, 10, 7, 0, -7, -10, -7 };
+	static const signed char ty[8] = { -10, -7, 0, 7, 10, 7, 0, -7 };
+	int i;
+
+	for (i = 0; i < 8; i++)
+		dr_line(cx, cy, cx + tx[i], cy + ty[i], 3, c, a);
+	dr_circle(cx, cy, 7, c, a);
+	dr_circle(cx, cy, 3, C_BG, 256);
+}
+
+static void icon_tv(int cx, int cy, unsigned c, int a)
+{
+	dr_rrect(cx - 10, cy - 7, cx + 9, cy + 5, 3, c, a);
+	dr_rrect(cx - 8, cy - 5, cx + 7, cy + 3, 1, C_BG, 256);
+	dr_line(cx - 4, cy + 8, cx + 3, cy + 8, 2, c, a);
+}
+
+static void icon_classic(int cx, int cy, unsigned c, int a)
+{
+	dr_ring(cx, cy, 8, 6, 0, c, a);
+	dr_line(cx, cy - 4, cx, cy, 2, c, a);
+	dr_line(cx, cy, cx + 3, cy + 2, 2, c, a);
+}
+
+static void icon_bolt(int x, int y, unsigned c, int a)
+{
+	dr_line(x + 3, y, x, y + 5, 2, c, a);
+	dr_line(x, y + 5, x + 4, y + 5, 2, c, a);
+	dr_line(x + 4, y + 5, x + 1, y + 10, 2, c, a);
+}
+
+static void chevron_right(int cx, int cy, unsigned c, int a)
+{
+	dr_line(cx - 2, cy - 5, cx + 2, cy, 2, c, a);
+	dr_line(cx + 2, cy, cx - 2, cy + 5, 2, c, a);
 }
 
 static void draw_status_bar(void)
 {
-	int x;
+	int x = gfx_w - M - 24;
 
 	dr_fill(0, 0, gfx_w - 1, STATUS_H - 1, C_BG, 256);
 	dr_text(&font_small_medium, M, 14, clock_text, 0, C_TEXT, 256);
 	if (battery >= 0) {
 		int fillw = 18 * battery / 8;
-		unsigned c = battery <= 1 ? C_RED : battery <= 2 ? C_YELLOW : C_TEXT;
-		x = gfx_w - M - 24;
+		unsigned c = charging ? C_GREEN : battery <= 1 ? C_RED : battery <= 2 ? C_YELLOW : C_TEXT;
 		dr_rrect(x, 5, x + 21, 15, 3, C_TEXT, 100);		/* battery body */
 		dr_rrect(x + 1, 6, x + 20, 14, 2, C_BG, 256);
 		if (fillw > 0)
 			dr_rrect(x + 2, 7, x + 1 + fillw, 13, 2, c, 256);
 		dr_fill(x + 22, 8, x + 23, 12, C_TEXT, 100);		/* terminal */
+		if (charging)
+			icon_bolt(x - 9, 5, C_GREEN, 256);
 	}
 }
 
 static void draw_power_bar(void)
 {
 	const char *t = "Power Off";
-	int w = dr_text_width(&font_button, t, 0), y;
+	int w = dr_text_width(&font_button, t, 0) + 24, y, x;
 
-	/* scroll edge: content fades out above the bar */
-	for (y = POWER_Y - 16; y < POWER_Y - 6; y++)
+	for (y = POWER_Y - 16; y < POWER_Y - 6; y++)	/* content fades out above the bar */
 		dr_hspan(0, gfx_w - 1, y, C_BG, (y - (POWER_Y - 16)) * 26);
 	dr_fill(0, POWER_Y - 6, gfx_w - 1, gfx_h - 1, C_BG, 256);
 	dr_rrect(M, POWER_Y, gfx_w - 1 - M, POWER_Y + POWER_H - 1, 12,
 		 pressed(T_POWER, 0) ? C_RED_BG_HI : C_RED_BG, 256);
-	dr_text(&font_button, (gfx_w - w) / 2, POWER_Y + 26, t, 0, C_RED, 256);
+	x = (gfx_w - w) / 2;
+	icon_power(x + 8, POWER_Y + 20, C_RED, 256);
+	dr_text(&font_button, x + 24, POWER_Y + 26, t, 0, C_RED, 256);
 }
 
 static const char *back_label(const struct screen *s)
@@ -602,24 +735,24 @@ static void draw_nav(const struct screen *s, const char *title)
 	int a = pressed(T_BACK, 0) ? 110 : 256, w;
 
 	dr_fill(0, STATUS_H, gfx_w - 1, STATUS_H + NAV_H - 1, C_BG, 256);
-	for (w = 0; w < 6; w++) {	/* back chevron "<" */
-		dr_fill(M + w, STATUS_H + 13 - w, M + w + 1, STATUS_H + 14 - w, C_ACCENT, a);
-		dr_fill(M + w, STATUS_H + 13 + w, M + w + 1, STATUS_H + 14 + w, C_ACCENT, a);
-	}
+	dr_line(M + 6, STATUS_H + 8, M + 1, STATUS_H + 14, 2, C_ACCENT, a);	/* "<" */
+	dr_line(M + 1, STATUS_H + 14, M + 6, STATUS_H + 20, 2, C_ACCENT, a);
 	dr_text(&font_body, M + 12, STATUS_H + 19, back_label(s), 0, C_ACCENT, a);
-	/* collapsed title once the large title has scrolled away */
-	if (title && (s->sy >> 8) > A_TITLE) {
-		int t = (s->sy >> 8) - A_TITLE, al = t > 16 ? 256 : t * 16;
-		w = dr_text_width(&font_small_medium, title, 0);
-		if (w < gfx_w - 2 * 110 + 40 && !(s->kind == S_ACT || s->kind == S_DEVICE))
-			dr_text(&font_small_medium, (gfx_w - w) / 2, STATUS_H + 18, title, 0, C_TEXT, al);
-		dr_hspan(0, gfx_w - 1, STATUS_H + NAV_H - 1, 0xffffff, al / 10);
+	if ((s->sy >> 8) > 0) {	/* scrolled: soft edge under the bar, title when the large one is gone */
+		int t = (s->sy >> 8) - A_TITLE, al = t <= 0 ? 0 : t > 16 ? 256 : t * 16;
+		if (title && al) {
+			w = dr_text_width(&font_small_medium, title, 0);
+			if (w < 100)
+				dr_text(&font_small_medium, (gfx_w - w) / 2 + 20, STATUS_H + 18, title, 0, C_TEXT, al);
+		}
+		for (w = 0; w < 8; w++)
+			dr_hspan(0, gfx_w - 1, STATUS_H + NAV_H + w, C_BG, 200 - w * 25);
 	}
 	if (s->kind == S_ACT || s->kind == S_DEVICE) {	/* status pill */
 		w = dr_text_width(&font_caption, status_text, 0) + 22;
 		if (w < 104) {
 			dr_rrect(gfx_w - M - w, STATUS_H + 5, gfx_w - M - 1, STATUS_H + 23, 9, status_color, 46);
-			dr_rrect(gfx_w - M - w + 8, STATUS_H + 11, gfx_w - M - w + 13, STATUS_H + 16, 3, status_color, 256);
+			dr_circle(gfx_w - M - w + 10, STATUS_H + 14, 3, status_color, 256);
 			dr_text(&font_caption, gfx_w - M - w + 17, STATUS_H + 18, status_text, 0, status_color, 256);
 		}
 	}
@@ -655,27 +788,6 @@ static void tile(int x, int y, const char *label, const char *num, int hi)
 		dr_text(&font_body, x + (TILE_W - w) / 2, y + 24, label, 0, C_TEXT, 256);
 }
 
-static void card(int y, unsigned tint, const char *initial, const char *title, const char *sub,
-		 unsigned sub_c, int dot, int hi)
-{
-	int inset = hi ? 2 : 0, k, cx = gfx_w - M - 16, cyy = y + 27;
-
-	dr_rrect(M + inset, y + inset, gfx_w - 1 - M - inset, y + CARD_H - 1 - inset, 14,
-		 hi ? C_CARD_HI : C_CARD, 256);
-	dr_hspan(M + 14, gfx_w - 1 - M - 14, y + inset, 0xffffff, 18);
-	dr_rrect(M + 10, y + 10, M + 43, y + 43, 17, tint, 256);
-	dr_text(&font_headline, M + 27 - dr_text_width(&font_headline, initial, 0) / 2, y + 33,
-		initial, 0, C_TEXT, 256);
-	dr_text_fit(&font_button, M + 54, y + 24, title, 0, C_TEXT, 256, gfx_w - 2 * M - 80);
-	if (dot)
-		dr_rrect(M + 54, y + 34, M + 59, y + 39, 3, sub_c, 256);
-	dr_text(&font_caption, M + 54 + (dot ? 9 : 0), y + 41, sub, 0, sub_c, 256);
-	for (k = 0; k < 5; k++) {	/* chevron */
-		dr_fill(cx + k, cyy - 5 + k, cx + k + 1, cyy - 4 + k, C_TEXT3, 256);
-		dr_fill(cx + k, cyy + 5 - k, cx + k + 1, cyy + 6 - k, C_TEXT3, 256);
-	}
-}
-
 static void initial_of(char *dst, const char *label)
 {
 	dst[0] = label[0] ? label[0] : '?';
@@ -688,68 +800,195 @@ static void initial_of(char *dst, const char *label)
 	}
 }
 
+static void card(int y, unsigned tint, const char *label, const char *sub, unsigned sub_c,
+		 int dot, int hi)
+{
+	int inset = hi ? 2 : 0;
+	char ini[4];
+
+	dr_rrect(M + inset, y + inset, gfx_w - 1 - M - inset, y + CARD_H - 1 - inset, 14,
+		 hi ? C_CARD_HI : C_CARD, 256);
+	dr_hspan(M + 14, gfx_w - 1 - M - 14, y + inset, 0xffffff, 18);
+	/* icon: tinted disc with a soft glow of its own colour */
+	dr_circle(M + 27, y + 27, 20, tint, 40);
+	dr_circle(M + 27, y + 27, 17, tint, 256);
+	dr_circle(M + 27, y + 22, 12, 0xffffff, 26);		/* light from above */
+	initial_of(ini, label);
+	dr_text(&font_headline, M + 27 - dr_text_width(&font_headline, ini, 0) / 2, y + 33,
+		ini, 0, C_TEXT, 256);
+	dr_text_fit(&font_button, M + 54, y + 24, label, 0, C_TEXT, 256, gfx_w - 2 * M - 80);
+	if (dot)
+		dr_circle(M + 57, y + 37, 3, sub_c, 256);
+	dr_text(&font_caption, M + 54 + (dot ? 9 : 0), y + 41, sub, 0, sub_c, 256);
+	chevron_right(gfx_w - M - 14, y + 27, C_TEXT3, 256);
+}
+
+/* row of a grouped list; first/last round the group's corners */
+static void row(int y, int first, int last, int hi, int icon, unsigned icon_bg, const char *label,
+		const char *value)
+{
+	int r = 12;
+
+	if (first && last)
+		dr_rrect(M, y, gfx_w - 1 - M, y + ROW_H - 1, r, hi ? C_CARD_HI : C_CARD, 256);
+	else if (first) {
+		dr_rrect(M, y, gfx_w - 1 - M, y + ROW_H - 1 + r, r, hi ? C_CARD_HI : C_CARD, 256);
+	} else if (last) {
+		dr_rrect(M, y - r, gfx_w - 1 - M, y + ROW_H - 1, r, hi ? C_CARD_HI : C_CARD, 256);
+	} else
+		dr_fill(M, y, gfx_w - 1 - M, y + ROW_H - 1, hi ? C_CARD_HI : C_CARD, 256);
+	if (!first)
+		dr_hspan(M + 48, gfx_w - 1 - M, y, C_SEP, 256);
+	if (icon >= 0) {
+		dr_rrect(M + 10, y + 9, M + 35, y + 34, 7, icon_bg, 256);
+		switch (icon) {
+		case 0: icon_tv(M + 23, y + 21, C_TEXT, 256); break;
+		case 1: icon_gear(M + 23, y + 22, C_TEXT, 256); break;
+		case 2: icon_classic(M + 23, y + 22, C_TEXT, 256); break;
+		}
+	}
+	dr_text(&font_body, M + (icon >= 0 ? 48 : 14), y + 27, label, 0, C_TEXT, 256);
+	if (value)
+		dr_text(&font_body, gfx_w - M - 24 - dr_text_width(&font_body, value, 0), y + 27, value, 0,
+			C_TEXT2, 256);
+	chevron_right(gfx_w - M - 14, y + 22, C_TEXT3, 256);
+}
+
+static void draw_home(struct screen *s)
+{
+	int n = n_activities(), i;
+	char sub[24];
+
+	dr_text(&font_title, M, H_TITLE, "Activities", -1, C_TEXT, 256);
+	for (i = 0; i < n; i++)
+		card(H_CARD(i), tints[i % 6], act[i].label, i == running ? "Running" : "Tap to start",
+		     i == running ? C_GREEN : C_TEXT2, i == running, pressed(T_ACT, i));
+	section(H_MORE, "More");
+	cat(sub, catnum(sub, 0, ndev), "");
+	row(H_ROW(0), 1, 0, pressed(T_DEVICES, 0), 0, 0x0a84ff, "Devices", sub);
+	row(H_ROW(1), 0, 0, pressed(T_SETTINGS, 0), 1, 0x636366, "Settings", NULL);
+	row(H_ROW(2), 0, 1, pressed(T_CLASSIC, 0), 2, 0x48484a, "Classic UI", NULL);
+	s->content_h = H_ROW(3) + 8;
+}
+
+static void draw_activity(struct screen *s)
+{
+	struct activity *a = &act[s->index];
+	int i, y;
+
+	if (a->nsoft)
+		section(A_SECTION1, "Controls");
+	for (i = 0; i < a->nsoft; i++)
+		tile(TILE_X(i), A_TILE_Y(i), a->soft[i].label, NULL, pressed(T_SOFT, i));
+	y = tiles_end(a->nsoft) + 34;
+	if (a->nchan) {
+		section(y - 10, "Favorites");
+		for (i = 0; i < a->nchan; i++)
+			tile(TILE_X(i), y + (i >> 1) * TILE_STEP, a->chan[i].station, a->chan[i].number,
+			     pressed(T_CHAN, i));
+		y += ((a->nchan + 1) >> 1) * TILE_STEP;
+	}
+	if (!a->nsoft && !a->nchan)
+		dr_text(&font_body, M, 70, "Use the keys to control it.", 0, C_TEXT2, 256);
+	s->content_h = y + 8;
+}
+
+static void draw_settings(struct screen *s)
+{
+	char v[32];
+	int i, kx, sx;
+
+	dr_text(&font_title, M, A_TITLE, "Settings", -1, C_TEXT, 256);
+	/* brightness card: label, value, slider */
+	section(ST_BRIGHT - 6, "Display");
+	dr_rrect(M, ST_BRIGHT, gfx_w - 1 - M, ST_BRIGHT + 69, 12, C_CARD, 256);
+	dr_text(&font_body, M + 14, ST_BRIGHT + 24, "Brightness", 0, C_TEXT, 256);
+	cat(v, catnum(v, 0, set_brightness), "%");
+	dr_text(&font_body, gfx_w - M - 14 - dr_text_width(&font_body, v, 0), ST_BRIGHT + 24, v, 0, C_TEXT2, 256);
+	kx = SL_X1 + (SL_X2 - SL_X1) * set_brightness / 100;
+	dr_rrect(SL_X1, ST_SLIDER_Y - 2, SL_X2, ST_SLIDER_Y + 2, 2, 0x48484a, 256);
+	dr_rrect(SL_X1, ST_SLIDER_Y - 2, kx, ST_SLIDER_Y + 2, 2, C_ACCENT, 256);
+	dr_circle(kx, ST_SLIDER_Y + 1, 12, 0x000000, 70);			/* knob shadow */
+	dr_circle(kx, ST_SLIDER_Y, gesture == G_SLIDER ? 12 : 11, 0xffffff, 256);
+	/* display timeout: segmented control with a sliding selection */
+	section(ST_SEG - 6, "Turn display off after");
+	dr_rrect(M, ST_SEG, gfx_w - 1 - M, ST_SEG + 31, 9, C_CARD, 256);
+	sx = seg_spring.x >> 8;
+	dr_rrect(sx, ST_SEG + 2, sx + (seg_x(1) - seg_x(0)) - 1, ST_SEG + 29, 7, 0x636366, 256);
+	for (i = 0; i < NTIMEOUT; i++) {
+		int w = dr_text_width(&font_small_medium, timeout_labels[i], 0);
+		dr_text(&font_small_medium, seg_x(i) + (seg_x(1) - seg_x(0) - w) / 2, ST_SEG + 20,
+			timeout_labels[i], 0, C_TEXT, timeouts[i] == set_timeout ? 256 : 190);
+	}
+	/* sounds switch */
+	section(ST_SOUND - 6, "Feedback");
+	dr_rrect(M, ST_SOUND, gfx_w - 1 - M, ST_SOUND + ROW_H - 1, 12,
+		 pressed(T_SOUND, 0) ? C_CARD_HI : C_CARD, 256);
+	dr_text(&font_body, M + 14, ST_SOUND + 27, "Sounds", 0, C_TEXT, 256);
+	{
+		int t = sw_spring.x >> 8, x2 = gfx_w - M - 12, x1 = x2 - 44;	/* t 0..256 */
+		dr_rrect(x1, ST_SOUND + 9, x2, ST_SOUND + 35, 13, dr_mix(0x39393d, C_GREEN, t < 0 ? 0 : t > 256 ? 256 : t), 256);
+		kx = x1 + 13 + (18 * t >> 8);
+		dr_circle(kx, ST_SOUND + 23, 12, 0x000000, 60);
+		dr_circle(kx, ST_SOUND + 22, 11, 0xffffff, 256);
+	}
+	/* about */
+	section(ST_ABOUT - 6, "Remote");
+	dr_rrect(M, ST_ABOUT, gfx_w - 1 - M, ST_ABOUT + 2 * ROW_H - 1, 12, C_CARD, 256);
+	dr_text(&font_body, M + 14, ST_ABOUT + 27, "Battery", 0, C_TEXT, 256);
+	if (battery >= 0) {
+		int k = cat(v, catnum(v, 0, battery), " of 8");
+		if (charging)
+			cat(v, k, ", charging");
+	} else
+		cat(v, 0, "unknown");
+	dr_text(&font_body, gfx_w - M - 14 - dr_text_width(&font_body, v, 0), ST_ABOUT + 27, v, 0, C_TEXT2, 256);
+	dr_hspan(M + 14, gfx_w - 1 - M, ST_ABOUT + ROW_H, C_SEP, 256);
+	dr_text(&font_body, M + 14, ST_ABOUT + ROW_H + 27, "Interface", 0, C_TEXT, 256);
+	cat(v, cat(v, 0, "Native "), VERSION);
+	dr_text(&font_body, gfx_w - M - 14 - dr_text_width(&font_body, v, 0), ST_ABOUT + ROW_H + 27, v, 0,
+		C_TEXT2, 256);
+	s->content_h = ST_ABOUT + 2 * ROW_H + 12;
+}
+
+/* colour wash in the screen's own colour behind the large title */
+static void wash(const struct screen *s)
+{
+	unsigned c;
+	int y, top = content_top(s), h = 70;
+
+	if (s->kind == S_ACT)
+		c = tints[s->index % 6];
+	else if (s->kind == S_DEVICE)
+		c = device_tint(&dev[s->index]);
+	else
+		return;
+	for (y = 0; y < h; y++)
+		dr_hspan(0, gfx_w - 1, top + y - (s->sy >> 8) / 2, c, (h - y) * 40 / h);
+}
+
 /* draw screen s with its content scrolled; dr_ox is the horizontal offset */
 static void draw_screen(struct screen *s)
 {
-	int top = content_top(s), i, y;
+	int top = content_top(s), bottom = content_bottom(s), y, i;
 	int cx1 = dr_cx1, cx2 = dr_cx2;		/* horizontal clip set by the caller */
-	char ini[4];
 
 	dr_fill(0, 0, gfx_w - 1, gfx_h - 1, C_BG, 256);
-	dr_clip(cx1, top, cx2, content_bottom(s));
+	dr_clip(cx1, top, cx2, bottom);
+	wash(s);
 	dr_oy = top - (s->sy >> 8);
 	switch (s->kind) {
-	case S_HOME: {
-		int n = n_activities();
-		dr_text(&font_title, M, H_TITLE, "Activities", -1, C_TEXT, 256);
-		for (i = 0; i < n; i++) {
-			initial_of(ini, act[i].label);
-			card(H_CARD(i), tints[i % 6], ini, act[i].label,
-			     i == running ? "Running" : "Tap to start",
-			     i == running ? C_GREEN : C_TEXT2, i == running, pressed(T_ACT, i));
-		}
-		{
-			char sub[24];
-			cat(sub, catnum(sub, 0, ndev), ndev == 1 ? " device" : " devices");
-			card(H_CARD(n), 0x48484a, "D", "Devices", sub, C_TEXT2, 0, pressed(T_DEVICES, n));
-		}
-		y = H_CARD(n + 1);
-		{
-			const char *t = "Classic UI";
-			int w = dr_text_width(&font_body, t, 0);
-			dr_text(&font_body, (gfx_w - w) / 2, y + 24, t, 0,
-				pressed(T_CLASSIC, 0) ? C_TEXT : C_TEXT2, 256);
-		}
-		s->content_h = y + 44;
+	case S_HOME: draw_home(s); break;
+	case S_ACT:
+		dr_text_fit(&font_title, M, A_TITLE, act[s->index].label, -1, C_TEXT, 256, gfx_w - 2 * M);
+		draw_activity(s);
 		break;
-	}
-	case S_ACT: {
-		struct activity *a = &act[s->index];
-		dr_text_fit(&font_title, M, A_TITLE, a->label, -1, C_TEXT, 256, gfx_w - 2 * M);
-		if (a->nsoft)
-			section(A_SECTION1, "Controls");
-		for (i = 0; i < a->nsoft; i++)
-			tile(TILE_X(i), A_TILE_Y(i), a->soft[i].label, NULL, pressed(T_SOFT, i));
-		y = tiles_end(a->nsoft) + 34;
-		if (a->nchan) {
-			section(y - 10, "Favorites");
-			for (i = 0; i < a->nchan; i++)
-				tile(TILE_X(i), y + (i >> 1) * TILE_STEP, a->chan[i].station, a->chan[i].number,
-				     pressed(T_CHAN, i));
-			y += ((a->nchan + 1) >> 1) * TILE_STEP;
-		}
-		if (!a->nsoft && !a->nchan)
-			dr_text(&font_body, M, 70, "Use the keys to control it.", 0, C_TEXT2, 256);
-		s->content_h = y + 8;
-		break;
-	}
 	case S_DEVICES:
 		dr_text(&font_title, M, A_TITLE, "Devices", -1, C_TEXT, 256);
 		for (i = 0; i < ndev; i++) {
 			char sub[32];
 			cat(sub, catnum(sub, 0, dev[i].ncmd), " commands");
-			initial_of(ini, dev[i].label);
-			card(A_SECTION1 + 4 + i * CARD_STEP, device_tint(&dev[i]), ini, dev[i].label, sub,
+			card(A_SECTION1 + 4 + i * CARD_STEP, device_tint(&dev[i]), dev[i].label, sub,
 			     C_TEXT2, 0, pressed(T_DEV, i));
 		}
 		s->content_h = A_SECTION1 + 4 + ndev * CARD_STEP + 8;
@@ -763,22 +1002,34 @@ static void draw_screen(struct screen *s)
 		s->content_h = tiles_end(d->ncmd) + 12;
 		break;
 	}
+	case S_SETTINGS: draw_settings(s); break;
 	}
 	dr_oy = 0;
+	/* bottom edge: fade where more content follows */
+	if ((s->sy >> 8) < scroll_max(s) && !has_power_bar(s))
+		for (y = 0; y < 14; y++)
+			dr_hspan(0, gfx_w - 1, bottom - 13 + y, C_BG, y * 18);
 	dr_clip(cx1, 0, cx2, gfx_h - 1);
-	if (s->sv || gesture == G_SCROLL) {	/* scroll indicator while moving */
-		int vis = content_bottom(s) - top, mx = scroll_max(s);
-		if (mx > 0) {
+	/* scroll indicator: while moving, and briefly when the screen opens */
+	{
+		int mx = scroll_max(s), vis = bottom - top, a = 0;
+		long age = now - s->shown;
+		if (s->sv || gesture == G_SCROLL)
+			a = 110;
+		else if (age < 1200)
+			a = age < 900 ? 110 : (int)(1200 - age) * 110 / 300;
+		if (mx > 0 && a > 0) {
 			int h = vis * vis / s->content_h, pos = s->sy >> 8;
 			if (h < 20) h = 20;
 			if (pos < 0) pos = 0;
 			if (pos > mx) pos = mx;
 			y = top + 2 + (vis - h - 4) * pos / mx;
-			dr_rrect(gfx_w - 5, y, gfx_w - 3, y + h, 1, 0xffffff, 90);
+			dr_rrect(gfx_w - 5, y, gfx_w - 3, y + h, 1, 0xffffff, a);
 		}
 	}
 	if (has_nav(s))
-		draw_nav(s, s->kind == S_DEVICES ? "Devices" : NULL);
+		draw_nav(s, s->kind == S_ACT ? act[s->index].label : s->kind == S_DEVICE ? dev[s->index].label :
+			    s->kind == S_DEVICES ? "Devices" : "Settings");
 	if (has_power_bar(s))
 		draw_power_bar();
 }
@@ -826,6 +1077,7 @@ static void push(int kind, int index)
 	stack[depth].index = index;
 	stack[depth].sy = stack[depth].sv = 0;
 	stack[depth].content_h = 0;
+	stack[depth].shown = now;
 	nav.target = depth * gfx_w << 8;
 }
 
@@ -834,9 +1086,9 @@ static void pop_to(int d)
 	if (d < 0)
 		d = 0;
 	nav.target = d * gfx_w << 8;	/* depth follows when the spring settles */
+	stack[d].shown = now;
 }
 
-/* drop screens that have slid away */
 static void settle_stack(void)
 {
 	int d = nav.target / (gfx_w << 8);
@@ -857,15 +1109,15 @@ static int scroll_step(struct screen *s)
 		sp.x = s->sy;
 		sp.v = s->sv;
 		sp.target = s->sy < 0 ? 0 : mx;
-		spring_step(&sp);
+		spring_step_hz(&sp, 100);
 		s->sy = sp.x;
 		s->sv = sp.v;
 		return 1;
 	}
 	if (!s->sv)
 		return 0;
-	s->sy += s->sv / 50;			/* coast */
-	s->sv = s->sv * 24 / 25;
+	s->sy += s->sv / 100;			/* coast, 10 ms steps */
+	s->sv = s->sv * 49 / 50;
 	if (s->sv > -2560 && s->sv < 2560)	/* below 10 px/s */
 		s->sv = 0;
 	return 1;
@@ -877,6 +1129,16 @@ static int rubber(int over, int dim)
 	int a = over < 0 ? -over : over;
 
 	return over * dim * 55 / (100 * dim + 55 * a);
+}
+
+/* page the top screen up (-1) or down (+1): give it the velocity that
+ * coasts one page */
+static void page(int dir)
+{
+	struct screen *s = &stack[depth];
+	int pg = content_bottom(s) - content_top(s) - 40;
+
+	s->sv = dir * pg * 2 * 256;
 }
 
 #ifndef OHUI_HOST
@@ -950,6 +1212,57 @@ static const char *http_get(const char *path, char *buf, int size, int *len)
 	return hdr_end + 4;
 }
 
+/* store a value in data_srv like sys_srv's httppost: plain text body.
+ * data_srv tells its subscribers (SysService, Flash) about the change. */
+static void http_post(const char *path, const char *value)
+{
+	char req[256], rsp[128];
+	int fd = tcp("80"), k = 0, n = slen(value);
+
+	if (fd < 0) {
+		logs("POST: no data_srv for ", path);
+		return;
+	}
+	k = cat(req, k, "POST ");
+	k = cat(req, k, path);
+	k = cat(req, k, " HTTP/1.1\r\nUser-Agent: HAO\r\nConnection: close\r\n"
+		"Content-Type: text/plain\r\nContent-Length: ");
+	k = catnum(req, k, n);
+	k = cat(req, k, "\r\n\r\n");
+	k = cat(req, k, value);
+	write(fd, req, k);
+	if (readable(fd, 30))		/* short wait; do not stall the UI */
+		read(fd, rsp, sizeof(rsp));
+	close(fd);
+	logs("POST ", path);
+}
+
+static void post_num(const char *path, int v)
+{
+	char b[12];
+
+	catnum(b, 0, v);
+	http_post(path, b);
+}
+
+/* value data_srv keeps in its cache file (/usr/local/cache/system_<name>.dat) */
+static int cached(const char *name, int def)
+{
+	char path[80], b[16];
+	int fd, n;
+
+	cat(path, cat(path, cat(path, 0, "/usr/local/cache/system_"), name), ".dat");
+	fd = open(path, 0);
+	if (fd < 0)
+		return def;
+	n = read(fd, b, sizeof(b) - 1);
+	close(fd);
+	if (n <= 0 || b[0] < '0' || b[0] > '9')
+		return def;
+	b[n] = 0;
+	return atoi_s(b);
+}
+
 static void send_event(const char *name, const char *ptag, const char *value)
 {
 	char msg[200];
@@ -976,23 +1289,70 @@ static void send_event(const char *name, const char *ptag, const char *value)
 	logs(ret == k ? "send " : "SEND FAILED ", msg);
 }
 
+/* ---- hardware ---- */
+
+static void tone(int hz, int ms)
+{
+	int result = 0;
+
+	if (set_sound)
+		audio_buzzer_generate_sound(0, hz, ms, &result);
+}
+
+static void sound_tick(void) { tone(3200, 4); }
+static void sound_ready(void) { tone(2400, 30); tone(3600, 40); }
+static void sound_error(void) { tone(400, 120); }
+
 static int battery_logged;
 
-/* battery level 0..8 from env_mgr, as SysService.lua reads it. (data_srv
- * does not answer GET /system/batterylevel; waiting for it blocked input.) */
-static void update_battery(void)
+/* battery level 0..8 and charger state from env_mgr (data_srv does not
+ * answer GET /system/batterylevel; waiting for it blocked input) */
+static void update_power(void)
 {
-	int result = 0, level = 0;
+	int result = 0, level = 0, ch = 0;
 
 	env_get_battery_level(&result, &level);
 	level &= 0xffff;	/* only 16 bits are written */
-	if (battery_logged < 2) {
-		lognum("battery env result ", result);
-		lognum("battery env level ", level);
-		battery_logged++;
-	}
 	if (result == 0 && level <= 8)
 		battery = level;
+	result = 0;
+	env_get_charger_state(&result, &ch);
+	ch &= 0xffff;
+	if (battery_logged < 2) {
+		lognum("battery level ", level);
+		lognum("charger state ", ch);
+		battery_logged++;
+	}
+	if (result == 0)
+		charging = ch != 0;
+}
+
+/* returns 1 if it had to change the LED (one POST) */
+static int set_led(int which, int state)
+{
+	if (led_state[which] == state)
+		return 0;
+	led_state[which] = state;
+	post_num(led_path[which], state);
+	return 1;
+}
+
+/* soft-button LEDs show what the buttons do right now */
+static void update_leds(void)
+{
+	struct screen *s = &stack[depth];
+	int settled = nav.x == nav.target, mx = scroll_max(s);
+
+	if (!settled)
+		return;
+	if (gesture == G_SCROLL || s->sv)
+		return;			/* not while the list moves */
+	/* at most one change per loop, so input never waits for data_srv */
+	if (set_led(LED_UNDER_L, depth > 0 ? 1 : 0) ||
+	    set_led(LED_UNDER_R, depth == 0 && running >= 0 ? 2 : 0) ||
+	    set_led(LED_LEFT, mx > 0 && (s->sy >> 8) > 0 ? 1 : 0))
+		return;
+	set_led(LED_RIGHT, mx > 0 && (s->sy >> 8) < mx ? 1 : 0);
 }
 
 static void update_clock(void)
@@ -1095,15 +1455,27 @@ static int repeats(int scan)
 	return 0;
 }
 
+static int timeout_index(void)
+{
+	int i;
+
+	for (i = 0; i < NTIMEOUT; i++)
+		if (timeouts[i] >= set_timeout)
+			return i;
+	return NTIMEOUT - 1;
+}
+
 static void commit(int kind, int index)
 {
 	struct screen *s = &stack[depth];
 
+	sound_tick();
 	switch (kind) {
 	case T_ACT: start_activity(index); break;
 	case T_POWER: start_activity(power_off_index()); break;
 	case T_BACK: pop_to(depth - 1); break;
 	case T_DEVICES: push(S_DEVICES, 0); break;
+	case T_SETTINGS: push(S_SETTINGS, 0); break;
 	case T_DEV: push(S_DEVICE, index); break;
 	case T_SOFT:
 		send_event("SendIR", "ActionId", act[s->index].soft[index].action);
@@ -1117,6 +1489,17 @@ static void commit(int kind, int index)
 		send_event("SendIR", "ActionId", dev[s->index].cmd[index].action);
 		set_status(dev[s->index].cmd[index].label, C_ACCENT);
 		break;
+	case T_SEG:
+		set_timeout = timeouts[index];
+		seg_spring.target = seg_x(index) << 8;
+		post_num("/system/backlighttimeout", set_timeout);
+		break;
+	case T_SOUND:
+		set_sound = !set_sound;
+		sw_spring.target = set_sound ? 256 << 8 : 0;
+		post_num("/system/sound", set_sound);
+		sound_tick();
+		break;
 	}
 }
 
@@ -1127,12 +1510,16 @@ static void hao_message(const char *m, int n)
 
 	copy_tag(name, sizeof(name), m, end, "<Name>", "</Name>");
 	if (seq(name, "ReceiverLinkDown")) {
+		if (status_color != C_RED)
+			sound_error();
 		set_status("Blaster offline", C_RED);
 	} else if (seq(name, "Queue")) {
 		copy_tag(send, sizeof(send), m, end, "<Send>", "</Send>");
-		if (seq(send, "Done"))
+		if (seq(send, "Done")) {
+			if (status_color == C_YELLOW)
+				sound_ready();
 			set_status("Ready", C_GREEN);
-		else if ((seq(send, "IR") || seq(send, "RF")) && status_color != C_RED)
+		} else if ((seq(send, "IR") || seq(send, "RF")) && status_color != C_RED)
 			set_status("Sending", C_YELLOW);
 	} else if (name[0]) {
 		logs("hao ", name);
@@ -1169,43 +1556,82 @@ static int hao_poll(void)
 	return 1;
 }
 
+/* finger velocity in px/s over the last ~80 ms of samples */
+static void velocity(int *vx, int *vy)
+{
+	int newest = (h_n - 1) % NHIST, oldest = newest, i, dt;
+
+	*vx = *vy = 0;
+	for (i = 1; i < NHIST && i < h_n; i++) {
+		int k = (h_n - 1 - i) % NHIST;
+		if (now - h_t[k] > 80)
+			break;
+		oldest = k;
+	}
+	dt = (int)(h_t[newest] - h_t[oldest]);
+	if (dt <= 0)
+		return;
+	*vx = (h_x[newest] - h_x[oldest]) * 1000 / dt;
+	*vy = (h_y[newest] - h_y[oldest]) * 1000 / dt;
+}
+
+static void slider_to(int x)
+{
+	int v = (x - g_grab - SL_X1) * 100 / (SL_X2 - SL_X1), result = 0;
+
+	if (v < 5) v = 5;
+	if (v > 100) v = 100;
+	if (v != set_brightness) {
+		set_brightness = v;
+		env_set_backlight_master_level(v, &result);	/* live */
+	}
+}
+
 /* touch handling; returns 1 to quit */
 static int touch(int x, int y, int down, int was_down)
 {
 	struct screen *s = &stack[depth];
-	long t = now_ms();
-	int kind, index;
+	int kind, index, vx, vy;
 
+	if (down) {
+		h_x[h_n % NHIST] = x;
+		h_y[h_n % NHIST] = y;
+		h_t[h_n % NHIST] = now;
+		h_n++;
+	}
 	if (down && !was_down) {			/* touch-down */
-		g_x0 = g_lx = x;
-		g_y0 = g_ly = y;
-		g_lt = t;
-		g_vx = g_vy = 0;
+		g_x0 = x;
+		g_y0 = y;
 		g_sy0 = s->sy;
+		h_n = 0;
+		h_x[0] = x; h_y[0] = y; h_t[0] = now; h_n = 1;
 		s->sv = 0;				/* catch a coasting list */
 		if (depth > 0 && x < EDGE && nav.x == nav.target) {
 			gesture = G_EDGE;
 			press_kind = T_NONE;
-		} else {
-			gesture = G_TAP;
-			hit(x, y, 0, &press_kind, &press_index);
+			return 0;
 		}
+		hit(x, y, 0, &press_kind, &press_index);
+		if (press_kind == T_SLIDER) {		/* grab the knob where it is touched */
+			int kx = SL_X1 + (SL_X2 - SL_X1) * set_brightness / 100;
+			g_grab = x - kx > -16 && x - kx < 16 ? x - kx : 0;
+			gesture = G_SLIDER;
+			slider_to(x);
+			return 0;
+		}
+		gesture = G_TAP;
+		/* in scrollable lists the press shows only if the finger stays */
+		press_t = scroll_max(s) > 0 && press_kind != T_POWER && press_kind != T_BACK ? now + TAP_DELAY : now;
 		return 0;
 	}
 	if (down) {					/* move */
-		int dt = (int)(t - g_lt);
-		if (dt > 0) {
-			g_vx = (g_vx + (x - g_lx) * 1000 / dt) / 2;
-			g_vy = (g_vy + (y - g_ly) * 1000 / dt) / 2;
-		}
-		g_lx = x;
-		g_ly = y;
-		g_lt = t;
 		if (gesture == G_TAP) {
 			int dy = y - g_y0;
 			if ((dy > SLOP || dy < -SLOP) && scroll_max(s) > 0) {
 				gesture = G_SCROLL;
 				press_kind = T_NONE;
+				g_y0 = y;		/* start 1:1 from here, no jump */
+				g_sy0 = s->sy;
 			} else {
 				hit(x, y, SLOP, &kind, &index);
 				if (kind != press_kind || index != press_index)
@@ -1226,10 +1652,13 @@ static int touch(int x, int y, int down, int was_down)
 			if (dx > gfx_w) dx = gfx_w;
 			nav.x = (depth * gfx_w - dx) << 8;
 			nav.v = 0;
+		} else if (gesture == G_SLIDER) {
+			slider_to(x);
 		}
 		return 0;
 	}
 	/* release */
+	velocity(&vx, &vy);
 	if (gesture == G_TAP && press_kind != T_NONE) {
 		int k = press_kind, i = press_index;
 		press_kind = T_NONE;
@@ -1240,15 +1669,18 @@ static int touch(int x, int y, int down, int was_down)
 		return 0;
 	}
 	if (gesture == G_SCROLL) {
-		s->sv = -g_vy * 256;			/* hand the finger's velocity to the list */
+		s->sv = -vy * 256;			/* hand the finger's velocity to the list */
 	} else if (gesture == G_EDGE) {
 		/* project where the swipe would come to rest (deceleration 0.998/ms) */
-		int dx = x - g_x0 + g_vx / 2;
+		int dx = x - g_x0 + vx / 2;
 		if (dx > gfx_w / 2)
 			pop_to(depth - 1);
 		else
 			nav.target = depth * gfx_w << 8;
-		nav.v = -g_vx * 256;
+		nav.v = -vx * 256;
+	} else if (gesture == G_SLIDER) {
+		post_num("/system/backlightlevel", set_brightness);	/* save */
+		sound_tick();
 	}
 	press_kind = T_NONE;
 	gesture = G_NONE;
@@ -1262,7 +1694,7 @@ int main(int argc, char **argv, char **envp)
 	gfi_layer_t il;
 	const char *body;
 	int i, n, held = -1, held_ms = 0, touching = 0, quit = 0, dirty = 1, frames = 0;
-	long last_frame = 0, last_tick = 0, t;
+	long last_frame = 0, last_clock = 0, last_power = 0;
 
 	(void)argc; (void)argv; (void)envp;
 	if ((n = gfx_init()) != 0 || (n = dr_init()) != 0) {
@@ -1275,7 +1707,8 @@ int main(int argc, char **argv, char **envp)
 	dr_text(&font_body, M, 84, "Loading...", 0, C_TEXT2, 256);
 	dr_present(0, 0, gfx_w - 1, gfx_h - 1);
 
-	logs("ohui v4 start", NULL);
+	logs("ohui v" VERSION " start", NULL);
+	now = now_ms();
 	body = http_get("/userconfig", cfg, sizeof(cfg), &n);
 	if (body && n > 0)
 		parse_config(body, n);
@@ -1288,9 +1721,19 @@ int main(int argc, char **argv, char **envp)
 	if (hao < 0)
 		set_status("No connection", C_RED);
 	env_service_connect("127.0.0.1");
+	audio_service_connect("127.0.0.1");
+	set_brightness = cached("backlightlevel", 60);
+	set_timeout = cached("backlighttimeout", 30);
+	set_sound = cached("sound", 0);
+	lognum("settings brightness ", set_brightness);
+	lognum("settings timeout ", set_timeout);
+	lognum("settings sound ", set_sound);
+	seg_spring.x = seg_spring.target = seg_x(timeout_index()) << 8;
+	sw_spring.x = sw_spring.target = set_sound ? 256 << 8 : 0;
 	update_clock();
-	update_battery();
+	update_power();
 	stack[0].kind = S_HOME;
+	stack[0].shown = now;
 	if (gfi_group_attach(&grp, 1, 0) != 0 ||
 	    gfi_layer_attach(&il, grp, 0, gfx_main_layer) != 0 ||
 	    gfi_layer_set_attrs(il, 0, 0, gfx_w - 1, gfx_h - 1, 7) != 0 ||
@@ -1298,11 +1741,12 @@ int main(int argc, char **argv, char **envp)
 		logs("input setup failed", NULL);
 		return 4;
 	}
-	last_tick = now_ms();
+	last_clock = last_power = now_ms();
 
 	while (!quit) {
 		int key = -1, moving;
 
+		now = now_ms();
 		/* 1. input first */
 		for (i = 0; i < 16; i++)
 			ev[i] = 0;
@@ -1341,6 +1785,12 @@ int main(int argc, char **argv, char **envp)
 				pop_to(0);
 			else if (key == SCAN_UNDER_L)
 				pop_to(depth - 1);
+			else if (key == SCAN_UNDER_R && depth == 0 && running >= 0)
+				push(S_ACT, running);
+			else if (key == SCAN_SIDE_L)
+				page(-1);
+			else if (key == SCAN_SIDE_R)
+				page(1);
 			else
 				hard_key(key);
 		} else if (held >= 0 && repeats(held)) {
@@ -1352,41 +1802,61 @@ int main(int argc, char **argv, char **envp)
 			}
 		}
 
-		/* 2. hao, clock and battery */
+		/* 2. hao, clock, power */
 		if (hao_poll())
 			dirty = 1;
-		t = now_ms();
-		if (t - last_tick > 30000) {
-			last_tick = t;
+		if (now - last_clock > 15000) {
+			last_clock = now;
 			update_clock();
-			update_battery();
 			dirty = 1;
 		}
+		if (now - last_power > 4000) {
+			int b = battery, c = charging;
+			last_power = now;
+			update_power();
+			if (b != battery || c != charging)
+				dirty = 1;
+		}
 
-		/* 3. motion */
+		/* 3. motion (10 ms steps) */
 		moving = 0;
 		if (gesture != G_EDGE && nav.x != nav.target) {
-			spring_step(&nav);
+			spring_step_hz(&nav, 100);
+			moving = 1;
+		}
+		if (seg_spring.x != seg_spring.target) {
+			spring_step_hz(&seg_spring, 100);
+			moving = 1;
+		}
+		if (sw_spring.x != sw_spring.target) {
+			spring_step_hz(&sw_spring, 100);
 			moving = 1;
 		}
 		settle_stack();
 		if (scroll_step(&stack[depth]))
 			moving = 1;
+		if (press_kind != T_NONE && gesture == G_TAP && now >= press_t && now < press_t + 20)
+			dirty = 1;		/* delayed press becomes visible */
+		if (now - stack[depth].shown < 1300)
+			moving = 1;		/* scroll indicator flash fades */
+		update_leds();
 
-		/* 4. draw: always while moving, else at most every FRAME_MS */
-		if ((dirty || moving) && (moving || t - last_frame >= FRAME_MS)) {
+		/* 4. draw: while moving every loop, else at most every FRAME_MS */
+		if ((dirty || moving) && (moving || now - last_frame >= FRAME_MS)) {
 			long t0 = now_ms();
 			render();
 			dr_present(0, 0, gfx_w - 1, gfx_h - 1);
 			if (frames < 3)
 				lognum("frame ms ", (int)(now_ms() - t0));
 			frames++;
-			last_frame = t;
+			last_frame = now;
 			dirty = 0;
 		}
 		usleep(POLL_MS * 1000);
 	}
 	logs("ohui end (classic ui)", NULL);
+	for (i = 0; i < 4; i++)
+		set_led(i, 0);
 	if (hao >= 0)
 		close(hao);
 	gf_dev_detach(gfx_dev);

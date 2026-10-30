@@ -10,6 +10,7 @@ int creat(const char *path, int mode);
 int write(int fd, const void *buf, unsigned n);
 int close(int fd);
 int read(int fd, void *buf, unsigned n);
+int open(const char *path, int flags, ...);	/* flags 0 = O_RDONLY */
 
 /* select(): fd_set is a bit array of 32-bit words; timeval = {sec, usec} */
 struct timeval { long tv_sec; long tv_usec; };
@@ -46,6 +47,10 @@ int env_service_connect(const char *host);
 int env_set_backlight_master(int on, int *result);
 int env_set_backlight_master_level(int level, int *result);
 int env_get_battery_level(int *result, int *level);	/* order as in SysService.lua */
+int env_get_charger_state(int *result, int *state);
+/* audio_mgr: buzzer tone; the first value is unused, then Hz and ms */
+int audio_service_connect(const char *host);
+int audio_buzzer_generate_sound(int unused, int hz, int ms, int *result);
 
 /* libgf.so.1 (QNX Graphics Framework), call sequence and argument order as
  * used by flash-gf. Handles are opaque pointers; info structs are only
