@@ -50,6 +50,8 @@ int env_get_battery_level(int *result, int *level);	/* order as in SysService.lu
 int env_get_charger_state(int *result, int *state);
 int env_get_cradle_state(int *result, int *state);
 int env_get_light_level(int *result, int *level);
+int env_get_light_reading(int *result, int *reading);
+int env_get_tune_light_read_freq(int *result, int *freq);
 /* audio_mgr: buzzer tone; the first value is unused, then Hz and ms */
 int audio_service_connect(const char *host);
 int audio_buzzer_generate_sound(int unused, int hz, int ms, int *result);

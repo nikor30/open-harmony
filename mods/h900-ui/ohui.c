@@ -34,7 +34,7 @@
  * if ohui fails. Log: /usr/local/cache/ohui.log. */
 #include <ohdraw.h>
 
-#define VERSION		"7"
+#define VERSION		"8"
 #define POLL_MS		10
 #define FRAME_MS	33
 #define REPEAT_DELAY	400
@@ -102,7 +102,10 @@ static int battery = -1;	/* level 0..8 (cache/batt_lvls.dat: mV thresholds for 1
 static int charging;
 static int docked, dock_dismissed;	/* cradle */
 static struct spring night;		/* night clock opacity 0..256*256 */
-static int light = -1;			/* ambient light sensor, raw */
+static int light = -1;			/* ambient light sensor level */
+static int light_raw = -1;		/* env_get_light_reading */
+static int night_on;			/* cradle mode applied (stay awake, dimmed) */
+#define NIGHT_BRIGHTNESS 12
 static long now;		/* ms, updated every loop */
 
 static char status_text[24] = "Ready";
@@ -954,9 +957,11 @@ static void draw_settings(struct screen *s)
 		C_TEXT2, 256);
 	dr_hspan(M + 14, gfx_w - 1 - M, ST_ABOUT + 2 * ROW_H, C_SEP, 256);
 	dr_text(&font_body, M + 14, ST_ABOUT + 2 * ROW_H + 27, "Light sensor", 0, C_TEXT, 256);
-	if (light >= 0)
-		catnum(v, 0, light);
-	else
+	if (light >= 0) {
+		int k = catnum(v, 0, light);
+		k = cat(v, k, " / ");
+		catnum(v, k, light_raw);
+	} else
 		cat(v, 0, "-");
 	dr_text(&font_body, gfx_w - M - 14 - dr_text_width(&font_body, v, 0), ST_ABOUT + 2 * ROW_H + 27, v, 0,
 		C_TEXT2, 256);
@@ -1431,13 +1436,40 @@ static void update_sensors(void)
 	result = v = 0;
 	env_get_light_level(&result, &v);
 	v &= 0xffff;
+	if (result == 0)
+		light = v;
+	result = v = 0;
+	env_get_light_reading(&result, &v);
+	v &= 0xffff;
 	if (result == 0) {
-		if (light_logged < 40 && v != light) {
-			lognum("light ", v);
+		if (light_logged < 40 && v != light_raw) {
+			lognum("light level ", light);
+			lognum("light reading ", v);
 			light_logged++;
 		}
-		light = v;
+		light_raw = v;
 	}
+	if (light_logged == 0) {
+		int f = 0;
+		result = 0;
+		env_get_tune_light_read_freq(&result, &f);
+		lognum("light read freq ", f & 0xffff);
+		light_logged++;
+	}
+}
+
+/* in the cradle the bedside clock stays on, dimmed; SysService otherwise
+ * turns the display off after the timeout (/system/stayawake keeps it on) */
+static void apply_night(int on)
+{
+	int result = 0;
+
+	if (on == night_on)
+		return;
+	night_on = on;
+	post_num("/system/stayawake", on);
+	env_set_backlight_master_level(on ? NIGHT_BRIGHTNESS : set_brightness, &result);
+	logs(on ? "night on" : "night off", NULL);
 }
 
 /* returns 1 if it had to change the LED (one POST) */
@@ -1710,6 +1742,7 @@ static int touch(int x, int y, int down, int was_down)
 		if (down && !was_down) {
 			dock_dismissed = 1;
 			night.target = 0;
+			apply_night(0);
 		}
 		gesture = G_NONE;
 		press_kind = T_NONE;
@@ -1907,6 +1940,7 @@ int main(int argc, char **argv, char **envp)
 			if (night.target) {
 				dock_dismissed = 1;
 				night.target = 0;
+				apply_night(0);
 			}
 			if (key == SCAN_OFF && power_off_index() >= 0)
 				start_activity(power_off_index());
@@ -1944,6 +1978,7 @@ int main(int argc, char **argv, char **envp)
 			last_sensor = now;
 			update_sensors();
 			night.target = docked && !dock_dismissed ? 256 << 8 : 0;
+			apply_night(night.target != 0);
 			if (d != docked || (stack[depth].kind == S_SETTINGS))
 				dirty = 1;
 		}
@@ -2005,6 +2040,7 @@ int main(int argc, char **argv, char **envp)
 		usleep(POLL_MS * 1000);
 	}
 	logs("ohui end (classic ui)", NULL);
+	apply_night(0);
 	for (i = 0; i < 4; i++)
 		set_led(i, 0);
 	if (hao >= 0)
