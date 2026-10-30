@@ -91,6 +91,7 @@ static std::vector<String> jobs;
 static std::mutex jobsLock;
 static volatile bool restartPending;
 static uint32_t lastReconnect;
+static int lastSelftest = -1;  // -1 not run, 0 not heard, 1 heard
 
 static void addJob(const String &op, const String &body) {
   std::lock_guard<std::mutex> g(jobsLock);
@@ -185,12 +186,14 @@ static JsonObject findActivity(const String &id) {
 // ---------------------------------------------------------------- IR / RF
 
 // send one code object {"kind":"ir"|"rf", ...}; returns false if malformed
+static bool loopback;  // self-test: keep listening while sending
+
 static bool sendCode(JsonVariantConst code) {
   String kind = code["kind"] | "";
   if (kind == "ir") {
     String proto = code["protocol"] | "UNKNOWN";
     decode_type_t t = strToDecodeType(proto.c_str());
-    irrecv.disableIRIn();  // do not hear ourselves
+    if (!loopback) irrecv.disableIRIn();  // do not hear ourselves
     bool ok = false;
     if (t != decode_type_t::UNKNOWN && t != decode_type_t::RAW) {
       uint64_t v = strtoull((code["value"] | "0"), nullptr, 16);
@@ -215,7 +218,7 @@ static bool sendCode(JsonVariantConst code) {
       irsend.sendRaw(buf.data(), buf.size(), khz);
       ok = true;
     }
-    irrecv.enableIRIn();
+    if (!loopback) irrecv.enableIRIn();
     return ok;
   }
   if (kind == "rf") {
@@ -498,6 +501,7 @@ static void statusJson(JsonDocument &d) {
   d["fsUsed"] = LittleFS.usedBytes();
   d["fsTotal"] = LittleFS.totalBytes();
   d["running"] = runningActivity;
+  d["selftest"] = lastSelftest;
 }
 
 // collect a request body (may arrive in chunks), then call done(body)
@@ -548,6 +552,10 @@ static void setupWeb() {
         req->send(202, "application/json", "{}");
       },
       nullptr, onBody);
+  server.on("/api/selftest", HTTP_POST, [](AsyncWebServerRequest *req) {
+    addJob("selftest", "{}");
+    req->send(202, "application/json", "{}");
+  });
   server.on(
       "/api/run", HTTP_POST,
       [](AsyncWebServerRequest *req) {
@@ -685,6 +693,27 @@ void loop() {
       saveDb();
       JsonDocument e;
       logEvent("db", e);
+    } else if (op == "selftest") {
+      // send a NEC test code with the receiver on: if the IR LEDs fire, the
+      // gateway's own receiver hears it (reported as an rx event)
+      uint32_t before = rxCount;
+      loopback = true;
+      JsonDocument c;
+      c["kind"] = "ir";
+      c["protocol"] = "NEC";
+      c["value"] = "807F00FF";
+      c["bits"] = 32;
+      for (int i = 0; i < 3 && rxCount == before; i++) {
+        sendCode(c);
+        uint32_t t0 = millis();
+        while (millis() - t0 < 300) pollIr();
+      }
+      loopback = false;
+      JsonDocument e;
+      e["heard"] = rxCount != before;
+      e["pin"] = PIN_IR_TX;
+      logEvent("selftest", e);
+      lastSelftest = rxCount != before ? 1 : 0;
     } else if (op == "run") {
       startActivity(d["activity"] | "");
     } else if (d["device"].is<const char *>()) {

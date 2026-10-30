@@ -7,7 +7,8 @@ it learns and sends infrared (IRremoteESP8266, 100+ protocols, raw
 otherwise) and 433 MHz (rc-switch), keeps a library of devices, commands
 and activities, serves a web UI and links itself to Home Assistant.
 
-- **Web UI** at `http://ir-gateway.local/` (embedded in the firmware):
+- **Web UI** at `http://irgateway.niko.de/` (Pi-hole; fixed DHCP mapping
+  192.168.10.18, also `kincony.niko.de` and `ir-gateway.local`) (embedded in the firmware):
   devices with their commands as tiles (tap = send), learning with any
   remote ("+ Learn": press the original button once), activities as
   macros with pauses, a live feed of received codes, settings (Wi-Fi,
@@ -20,12 +21,14 @@ and activities, serves a web UI and links itself to Home Assistant.
   `irgw/<id>/code` (raw code JSON), `irgw/<id>/received`, `irgw/<id>/status`.
 - **REST API**: `GET /api/status`, `GET|PUT /api/db`, `GET /api/last`,
   `POST /api/send` (`{"device","command"}` or `{"code":{...}}`),
-  `POST /api/run` (`{"activity"}`), `POST /api/config`,
+  `POST /api/run` (`{"activity"}`), `POST /api/selftest` (sends a NEC code with the
+  receiver on; `selftest` in the status is 1 if the gateway heard itself), `POST /api/config`,
   `POST /api/update` (multipart `firmware`). WebSocket `/ws` streams
   `rx`, `sent`, `activity_start|done`, `db` events.
 
 Pins: IR receive GPIO23, IR send GPIO2 (7 IR LEDs), 433 MHz receive GPIO13,
-send GPIO22.
+send GPIO22. Both IR pins confirmed on 2026-10-30 (a learned SAMSUNG36 code;
+the self-test hears its own transmission).
 
 Codes are stored as JSON: `{"kind":"ir","protocol":"NEC","value":"20DF10EF","bits":32}`,
 `{"kind":"ir","protocol":"UNKNOWN","khz":38,"raw":[...µs...]}`, state
