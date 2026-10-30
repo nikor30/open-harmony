@@ -17,3 +17,5 @@ mods/h900-ui/ohui
 gateway/secrets.h
 gateway/.pio/
 gateway/mqtt.secret
+hub/.venv/
+hub/data/

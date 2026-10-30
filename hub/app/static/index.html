@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>open-harmony</title>
+<style>
+:root {
+  --bg: #000; --card: #1c1c1e; --card2: #2c2c2e; --sep: #38383a;
+  --text: #fff; --text2: #8e8e93; --text3: #636366;
+  --accent: #0a84ff; --green: #30d158; --yellow: #ffd60a; --red: #ff453a; --purple: #bf5af2; --orange: #ff9f0a;
+  --r: 14px;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Noto Sans", system-ui, sans-serif; }
+main { max-width: 720px; margin: 0 auto; padding: 0 16px calc(96px + env(safe-area-inset-bottom)); }
+header { position: sticky; top: 0; z-index: 5; padding: 14px 16px 10px; margin: 0 -16px;
+  background: rgba(0,0,0,.72); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%); }
+header .row { display: flex; align-items: center; gap: 10px; }
+h1 { font-size: 30px; line-height: 1.1; letter-spacing: -.02em; margin: 6px 0 2px; }
+h2 { font-size: 13px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase; color: var(--text2); margin: 26px 4px 8px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; font-size: 13px;
+  background: rgba(142,142,147,.18); color: var(--text2); }
+.pill i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.pill.ok { color: var(--green); background: rgba(48,209,88,.16); }
+.pill.warn { color: var(--yellow); background: rgba(255,214,10,.14); }
+.pill.err { color: var(--red); background: rgba(255,69,58,.14); }
+.spacer { flex: 1; }
+.group { background: var(--card); border-radius: var(--r); overflow: hidden; }
+.item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 52px; position: relative;
+  cursor: pointer; transition: background .12s; user-select: none; }
+.item + .item::before { content: ""; position: absolute; top: 0; left: 58px; right: 0; height: 1px; background: var(--sep); }
+.item.noicon + .item.noicon::before { left: 14px; }
+.item:active, .item.pressed { background: var(--card2); }
+.icon { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; flex: none;
+  font-weight: 600; font-size: 15px; color: #fff; }
+.item .title { flex: 1; min-width: 0; }
+.item .title b { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item .title small { color: var(--text2); font-size: 13px; }
+.chev { width: 8px; height: 8px; border: solid var(--text3); border-width: 2px 2px 0 0; transform: rotate(45deg); flex: none; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.tile { background: var(--card2); border-radius: 12px; padding: 12px; min-height: 52px; display: flex; align-items: center;
+  justify-content: center; text-align: center; font-weight: 500; cursor: pointer; user-select: none; position: relative;
+  transition: transform .12s cubic-bezier(.2,.8,.2,1), background .12s; box-shadow: inset 0 1px 0 rgba(255,255,255,.06); }
+.tile:active, .tile.pressed { transform: scale(.96); background: #48484a; }
+.tile .kind { position: absolute; top: 6px; right: 8px; font-size: 10px; color: var(--text3); letter-spacing: .04em; }
+.tile.flash { animation: flash .5s; }
+@keyframes flash { 0% { background: var(--accent); } 100% { background: var(--card2); } }
+button, .btn { font: inherit; border: 0; border-radius: 12px; padding: 12px 16px; background: var(--card2); color: var(--accent);
+  font-weight: 600; cursor: pointer; transition: transform .1s, opacity .1s; }
+button:active { transform: scale(.97); opacity: .8; }
+button.primary { background: var(--accent); color: #fff; }
+button.danger { color: var(--red); }
+button.wide { width: 100%; }
+input, select { font: inherit; color: var(--text); background: transparent; border: 0; outline: 0; width: 100%; padding: 0; }
+.field { display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 48px; position: relative; }
+.field + .field::before { content: ""; position: absolute; top: 0; left: 14px; right: 0; height: 1px; background: var(--sep); }
+.field label { color: var(--text); flex: none; width: 110px; }
+.field input, .field select { text-align: right; color: var(--text2); }
+.muted { color: var(--text2); font-size: 14px; margin: 8px 4px; }
+.code { font: 13px ui-monospace, "SF Mono", Menlo, monospace; color: var(--text2); word-break: break-all; }
+/* tab bar */
+nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; justify-content: center;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+  background: rgba(22,22,24,.78); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-top: 1px solid rgba(255,255,255,.08); }
+nav div { display: flex; gap: 4px; max-width: 720px; width: 100%; }
+nav a { flex: 1; text-align: center; color: var(--text2); text-decoration: none; font-size: 11px; padding: 4px 0;
+  border-radius: 10px; transition: color .15s; }
+nav a svg { display: block; margin: 2px auto 2px; width: 24px; height: 24px; }
+nav a.on { color: var(--accent); }
+section { display: none; animation: in .28s cubic-bezier(.2,.8,.2,1); }
+section.on { display: block; }
+@keyframes in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* sheet */
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,.5); opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 9; }
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; max-width: 720px; margin: 0 auto; max-height: 88vh; overflow: auto;
+  background: #1c1c1e; border-radius: 18px 18px 0 0; padding: 8px 16px calc(20px + env(safe-area-inset-bottom));
+  transform: translateY(105%); transition: transform .38s cubic-bezier(.2,.9,.25,1); box-shadow: 0 -10px 40px rgba(0,0,0,.5); }
+.sheet .grab { width: 36px; height: 5px; border-radius: 3px; background: #48484a; margin: 4px auto 10px; }
+.open .scrim { opacity: 1; pointer-events: auto; }
+.open .sheet { transform: none; }
+.sheet h3 { margin: 4px 0 12px; font-size: 20px; letter-spacing: -.01em; }
+.sheet .group { background: #2c2c2e; }
+.sheet .field + .field::before { background: #48484a; }
+.wave { display: flex; justify-content: center; gap: 6px; height: 46px; align-items: center; margin: 18px 0; }
+.wave i { width: 6px; border-radius: 3px; background: var(--accent); animation: wave 1s ease-in-out infinite; }
+.wave i:nth-child(2) { animation-delay: .1s } .wave i:nth-child(3) { animation-delay: .2s }
+.wave i:nth-child(4) { animation-delay: .3s } .wave i:nth-child(5) { animation-delay: .4s }
+@keyframes wave { 0%,100% { height: 10px; opacity: .5 } 50% { height: 40px; opacity: 1 } }
+.feed .item { cursor: default; }
+.step { display: flex; align-items: center; gap: 8px; padding: 10px 12px; }
+.step + .step { border-top: 1px solid #48484a; }
+.step select, .step input { background: #3a3a3c; border-radius: 8px; padding: 8px; color: var(--text); text-align: left; }
+.step input { width: 80px; }
+.step button { padding: 8px 10px; }
+.toast { position: fixed; left: 50%; bottom: calc(84px + env(safe-area-inset-bottom)); transform: translate(-50%, 20px); opacity: 0;
+  background: rgba(44,44,46,.95); padding: 10px 16px; border-radius: 99px; font-size: 14px; transition: all .25s; z-index: 20; pointer-events: none; }
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+<style>
+.act { display: flex; align-items: center; gap: 14px; padding: 16px; border-radius: 16px; background: var(--card);
+  cursor: pointer; user-select: none; transition: transform .14s cubic-bezier(.2,.8,.2,1), background .2s; position: relative; overflow: hidden; }
+.act + .act { margin-top: 8px; }
+.act:active { transform: scale(.98); }
+.act .big { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; font-size: 20px; font-weight: 600; flex: none; }
+.act .title { flex: 1; min-width: 0; }
+.act .title b { display: block; font-size: 17px; font-weight: 600; }
+.act .title small { color: var(--text2); font-size: 13px; }
+.act.on { background: linear-gradient(135deg, rgba(10,132,255,.32), rgba(10,132,255,.12)); box-shadow: inset 0 0 0 1px rgba(10,132,255,.5); }
+.act .bar { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--accent); transition: width .3s; }
+.act .edit { padding: 8px 10px; color: var(--text2); background: transparent; }
+.off { margin-top: 14px; }
+.steps { background: #2c2c2e; border-radius: 12px; overflow: hidden; }
+.step { flex-wrap: wrap; }
+.step .kind { font-size: 11px; color: var(--text2); width: 34px; flex: none; text-transform: uppercase; letter-spacing: .04em; }
+.step select { flex: 1; min-width: 140px; }
+.step input.wide { flex: 1; width: auto; min-width: 140px; }
+.seg { display: flex; gap: 6px; margin: 8px 0 0; }
+.seg button { flex: 1; padding: 9px; font-size: 14px; }
+.gwhead { display: flex; align-items: center; gap: 8px; margin: 26px 4px 8px; }
+.gwhead h2 { margin: 0; }
+.dev { margin-bottom: 8px; }
+.dev .item { cursor: default; }
+.dev .grid { padding: 0 12px 12px; }
+.empty { text-align: center; padding: 30px 10px; color: var(--text2); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="row"><span class="muted" style="margin:0">open-harmony</span><span class="spacer"></span>
+      <span id="hapill" class="pill"><i></i>Home Assistant</span></div>
+    <h1 id="title">Activities</h1>
+  </header>
+
+  <section id="tab-activities" class="on">
+    <div id="acts"></div>
+    <button class="wide danger off" id="alloff" onclick="switchTo(null)">All Off</button>
+    <h2></h2>
+    <button class="wide" onclick="editActivity()">Add Activity</button>
+    <p class="muted">An activity has start steps and stop steps. Switching runs the stop steps of the current activity first. Steps send IR/433&nbsp;MHz commands through a gateway, call any Home Assistant service, or wait.</p>
+  </section>
+
+  <section id="tab-devices">
+    <div id="devs"></div>
+  </section>
+
+  <section id="tab-settings">
+    <h2>Gateways</h2>
+    <div class="group" id="gwlist"></div>
+    <h2></h2>
+    <div class="group"><div class="field"><label>Add gateway</label><input id="gwurl" placeholder="irgateway.niko.de"></div></div>
+    <h2></h2>
+    <button class="wide" onclick="addGateway()">Add</button>
+    <h2>Library</h2>
+    <div class="group">
+      <div class="item noicon" onclick="exportAll()"><div class="title"><b>Export activities</b><small>Download the hub's activities as JSON</small></div><span class="chev"></span></div>
+      <div class="item noicon" onclick="$('#imp').click()"><div class="title"><b>Import activities</b><small>Replace the activities with a saved JSON file</small></div><span class="chev"></span></div>
+    </div>
+    <input id="imp" type="file" accept="application/json" hidden onchange="importAll(this.files[0])">
+  </section>
+</main>
+
+<nav><div>
+  <a href="#activities" data-tab="activities" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 5.5v13l10-6.5z" stroke-linejoin="round"/></svg>Activities</a>
+  <a href="#devices" data-tab="devices"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="12" rx="2.5"/><path d="M8 20h8"/></svg>Devices</a>
+  <a href="#settings" data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>Settings</a>
+</div></nav>
+
+<div id="sheetwrap"><div class="scrim" onclick="closeSheet()"></div><div class="sheet" id="sheet"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const TINT = ['#0a84ff', '#ff9f0a', '#bf5af2', '#30d158', '#ff375f', '#64d2ff', '#ffd60a'];
+let S = { gateways: [], activities: [], current: null, running: null, ha: false }, progress = {}, ha = null, learning = null;
+
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const tint = s => TINT[[...(s || '')].reduce((h, c) => h * 31 + c.charCodeAt(0) >>> 0, 7) % TINT.length];
+function toast(t) { const e = $('#toast'); e.textContent = t; e.classList.add('on'); clearTimeout(e._t); e._t = setTimeout(() => e.classList.remove('on'), 2200); }
+// Relative URLs: under Home Assistant ingress the page lives below /api/hassio_ingress/<token>/.
+async function api(path, opt = {}) {
+  const r = await fetch('api/' + path, { headers: { 'Content-Type': 'application/json' }, ...opt });
+  if (!r.ok) { const t = await r.text(); toast(t.slice(0, 120)); throw new Error(t); }
+  return r.headers.get('content-type')?.includes('json') ? r.json() : null;
+}
+const post = (path, body) => api(path, { method: 'POST', body: JSON.stringify(body) });
+function codeText(c) {
+  if (!c) return '';
+  if (c.kind === 'rf') return `433 MHz · ${c.code} · ${c.bits} bit · protocol ${c.protocol}`;
+  if (c.value) return `IR · ${c.protocol} · 0x${c.value} · ${c.bits} bit`;
+  if (c.state) return `IR · ${c.protocol} · state ${c.state.length / 2} bytes`;
+  return `IR · raw · ${c.raw?.length || 0} timings`;
+}
+
+// ---- tabs & sheet
+const TITLES = { activities: 'Activities', devices: 'Devices', settings: 'Settings' };
+function showTab(t) {
+  if (!TITLES[t]) t = 'activities';
+  document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === 'tab-' + t));
+  document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', a.dataset.tab === t));
+  $('#title').textContent = TITLES[t];
+}
+document.querySelectorAll('nav a').forEach(a => a.onclick = e => { e.preventDefault(); history.replaceState(0, '', '#' + a.dataset.tab); showTab(a.dataset.tab); });
+function openSheet(html) { $('#sheet').innerHTML = '<div class="grab"></div>' + html; $('#sheetwrap').classList.add('open'); }
+function closeSheet() { $('#sheetwrap').classList.remove('open'); learning = null; }
+
+// ---- render
+function render() {
+  $('#hapill').className = 'pill ' + (S.ha ? 'ok' : 'warn');
+  const acts = S.activities;
+  $('#acts').innerHTML = acts.length ? acts.map((a, i) => {
+    const on = S.current === a.id, run = S.running === a.id, p = progress[a.id];
+    const sub = run ? (p ? `${p.phase === 'stop' ? 'Stopping previous' : 'Starting'} · step ${p.index + 1} of ${p.total}` : 'Starting…')
+      : on ? 'On' : `${(a.start || []).length} steps`;
+    return `<div class="act ${on ? 'on' : ''}" onclick="switchTo('${a.id}')">
+      <div class="big" style="background:${tint(a.name)}">${esc((a.name || '?')[0].toUpperCase())}</div>
+      <div class="title"><b>${esc(a.name)}</b><small>${esc(sub)}</small></div>
+      <button class="edit" onclick="event.stopPropagation();editActivity(${i})">Edit</button>
+      ${run && p ? `<div class="bar" style="width:${Math.round((p.index + 1) / p.total * 100)}%"></div>` : ''}</div>`;
+  }).join('') : '<div class="group empty">No activities yet.</div>';
+  $('#alloff').style.display = S.current ? '' : 'none';
+
+  $('#devs').innerHTML = S.gateways.length ? S.gateways.map(g => `
+    <div class="gwhead"><h2>${esc(g.name)}</h2><span class="spacer"></span>
+      <span class="pill ${g.online ? 'ok' : 'err'}"><i></i>${g.online ? 'Online' : 'Offline'}</span></div>
+    ${g.db.devices.map(d => `<div class="group dev">
+      <div class="item"><div class="icon" style="background:${tint(d.name)}">${esc(d.name[0] || '?')}</div>
+        <div class="title"><b>${esc(d.name)}</b><small>${esc([d.type, d.commands.length + (d.commands.length === 1 ? ' command' : ' commands')].filter(Boolean).join(' · '))}</small></div></div>
+      <div class="grid">${d.commands.map(c => `<div class="tile" onclick="sendCmd(this,'${g.id}','${d.id}','${c.id}')">${esc(c.name)}
+        <span class="kind">${c.code?.kind === 'rf' ? '433' : 'IR'}</span></div>`).join('')}
+        <div class="tile" style="color:var(--accent)" onclick="learn('${g.id}','${esc(d.name)}')">+ Learn</div></div>
+    </div>`).join('')}
+    <button class="wide" onclick="learn('${g.id}')">Learn for a new device</button>`).join('')
+    : '<div class="group empty">Add a gateway in Settings.</div>';
+
+  $('#gwlist').innerHTML = S.gateways.map(g => `<div class="item"><div class="icon" style="background:${g.online ? 'var(--green)' : 'var(--text3)'}">G</div>
+    <div class="title"><b>${esc(g.name)}</b><small>${esc(g.url)} · ${g.online ? `fw ${esc(g.status.fw)} · ${g.status.rssi} dBm` : 'offline'}</small></div>
+    <button class="danger" style="padding:6px 12px" onclick="delGateway('${g.id}')">Remove</button></div>`).join('')
+    || '<div class="item noicon"><div class="title"><small>No gateways.</small></div></div>';
+}
+
+// ---- actions
+async function switchTo(id) {
+  if (S.running !== null && S.running === id) return;
+  await post('switch', { activity: id });
+}
+async function sendCmd(el, gw, device, command) {
+  el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+  await post(`gateways/${gw}/send`, { device, command });
+}
+async function addGateway() {
+  const url = $('#gwurl').value.trim(); if (!url) return;
+  await post('gateways', { url }); $('#gwurl').value = ''; toast('Gateway added');
+}
+async function delGateway(id) { if (confirm('Remove this gateway from the hub? Its library stays on the gateway.')) await api('gateways/' + id, { method: 'DELETE' }); }
+function exportAll() {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(S.activities, null, 1)], { type: 'application/json' }));
+  a.download = 'open-harmony-activities.json'; a.click();
+}
+async function importAll(f) { if (f && confirm('Replace all activities?')) await api('activities', { method: 'PUT', body: await f.text() }); }
+
+// ---- learning (the gateway hears the original remote)
+function learn(gw, device) { learning = { gw, device: device || '', code: null }; learnSheet(); }
+function learnSheet() {
+  const L = learning, c = L.code;
+  openSheet(`<h3>Learn${L.device ? ' for ' + esc(L.device) : ''}</h3>${c ? `
+    <div class="group"><div class="item noicon"><div class="title"><b>Got it</b><small class="code">${esc(codeText(c))}</small></div>
+      <button style="padding:6px 12px" onclick="post('gateways/${L.gw}/send',{code:learning.code});toast('Sent')">Test</button></div>
+      ${L.device ? '' : '<div class="field"><label>Device</label><input id="l-dev" placeholder="Blu-ray"></div>'}
+      <div class="field"><label>Name</label><input id="l-name" placeholder="Power"></div></div>
+    <h2></h2><button class="primary wide" onclick="saveLearned()">Save Command</button>
+    <h2></h2><button class="wide" onclick="learning.code=null;learnSheet()">Try Again</button>` : `
+    <p class="muted" style="text-align:center">Point the original remote at the gateway and press the button once.</p>
+    <div class="wave"><i></i><i></i><i></i><i></i><i></i></div>
+    <button class="wide" onclick="closeSheet()">Cancel</button>`}`);
+}
+async function saveLearned() {
+  const L = learning, device = L.device || $('#l-dev').value.trim(), name = $('#l-name').value.trim();
+  if (!device || !name) return toast('Device and name, please');
+  await post(`gateways/${L.gw}/commands`, { device, name, code: L.code });
+  closeSheet(); toast('Saved ' + name);
+}
+
+// ---- activity editor
+async function loadHa() {
+  if (ha || !S.ha) return;
+  const [entities, services] = await Promise.all([api('ha/entities'), api('ha/services')]);
+  ha = { entities, services };
+}
+async function editActivity(i) {
+  const a = i === undefined ? { name: '', start: [], stop: [] } : JSON.parse(JSON.stringify(S.activities[i]));
+  a.start ||= []; a.stop ||= [];
+  window._ed = { i, a };
+  drawEditor();
+  try { await loadHa(); drawEditor(); } catch (e) { }
+}
+function cmdOptions(st) {
+  return S.gateways.flatMap(g => g.db.devices.flatMap(d => d.commands.map(c => {
+    const v = `${g.id}|${d.id}|${c.id}`, cur = `${st.gateway}|${st.device}|${st.command}`;
+    return `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(d.name)} · ${esc(c.name)}</option>`;
+  }))).join('');
+}
+function haOptions(st) {
+  if (!ha) return `<option>${esc(st.service || 'loading…')}</option>`;
+  const dom = (st.entity_id || '').split('.')[0];
+  const svcs = Object.entries(ha.services).filter(([d]) => !st.entity_id || d === dom || d === 'homeassistant')
+    .flatMap(([d, list]) => list.map(s => `${d}.${s}`));
+  return svcs.map(s => `<option value="${esc(s)}" ${s === st.service ? 'selected' : ''}>${esc(s.split('.')[1].replace(/_/g, ' '))}</option>`).join('');
+}
+function stepRow(st, phase, j) {
+  const at = `data-p="${phase}" data-j="${j}"`;
+  const ctl = `<button onclick="testStep('${phase}',${j})" title="Run this step">▶</button>
+    <button class="danger" onclick="delStep('${phase}',${j})">✕</button>`;
+  if (st.do === 'send') return `<div class="step"><span class="kind">IR</span>
+    <select ${at} onchange="setSend(this)"><option value="">Pick a command…</option>${cmdOptions(st)}</select>${ctl}</div>`;
+  if (st.do === 'wait') return `<div class="step"><span class="kind">Wait</span>
+    <input ${at} inputmode="numeric" value="${st.ms}" onchange="ed(this).ms=+this.value||0"> ms<span class="spacer"></span>${ctl}</div>`;
+  return `<div class="step"><span class="kind">HA</span>
+    <select ${at} onchange="ed(this).entity_id=this.value;fixService(ed(this));drawEditor()"><option value="">Entity…</option>
+      ${(ha?.entities || (st.entity_id ? [{ entity_id: st.entity_id, name: st.entity_id }] : [])).map(e =>
+        `<option value="${esc(e.entity_id)}" ${e.entity_id === st.entity_id ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select>
+    <select ${at} onchange="ed(this).service=this.value">${haOptions(st)}</select>${ctl}</div>`;
+}
+function fixService(st) {
+  const dom = st.entity_id.split('.')[0], list = ha?.services[dom] || [];
+  if (!st.service?.startsWith(dom + '.')) st.service = dom + '.' + (list.includes('turn_on') ? 'turn_on' : list[0] || 'turn_on');
+}
+const ed = el => window._ed.a[el.dataset.p][+el.dataset.j];
+function setSend(el) { const [gateway, device, command] = el.value.split('|'); Object.assign(ed(el), { gateway, device, command }); }
+function addStep(phase, kind) {
+  const a = window._ed.a;
+  a[phase].push(kind === 'send' ? { do: 'send' } : kind === 'wait' ? { do: 'wait', ms: 1000 } : { do: 'ha', entity_id: '', service: '' });
+  drawEditor();
+}
+function delStep(phase, j) { window._ed.a[phase].splice(j, 1); drawEditor(); }
+async function testStep(phase, j) { await post('step', window._ed.a[phase][j]); toast('Done'); }
+function drawEditor() {
+  const { i, a } = window._ed, nameNow = $('#e-name')?.value;
+  if (nameNow !== undefined) a.name = nameNow;
+  const part = (phase, label) => `<h2>${label}</h2><div class="steps">${a[phase].map((s, j) => stepRow(s, phase, j)).join('')
+    || '<div class="step"><small class="muted" style="margin:0">No steps.</small></div>'}</div>
+    <div class="seg"><button onclick="addStep('${phase}','send')">+ IR / 433</button>
+      <button onclick="addStep('${phase}','ha')" ${S.ha ? '' : 'disabled'}>+ Home Assistant</button>
+      <button onclick="addStep('${phase}','wait')">+ Wait</button></div>`;
+  openSheet(`<h3>${i === undefined ? 'New Activity' : 'Edit Activity'}</h3>
+    <div class="group"><div class="field"><label>Name</label><input id="e-name" value="${esc(a.name)}" placeholder="Watch a movie"></div></div>
+    ${part('start', 'When starting')}${part('stop', 'When stopping')}
+    <h2></h2><button class="primary wide" onclick="saveActivity()">Save</button>
+    ${i === undefined ? '' : '<h2></h2><button class="wide danger" onclick="deleteActivity()">Delete Activity</button>'}`);
+}
+async function saveActivity() {
+  const { i, a } = window._ed; a.name = $('#e-name').value.trim();
+  if (!a.name) return toast('Give it a name');
+  for (const p of ['start', 'stop']) a[p] = a[p].filter(s => s.do !== 'send' || s.command).filter(s => s.do !== 'ha' || s.service);
+  const list = [...S.activities]; if (i === undefined) list.push(a); else list[i] = a;
+  await api('activities', { method: 'PUT', body: JSON.stringify(list) }); closeSheet(); toast('Saved');
+}
+async function deleteActivity() {
+  if (!confirm('Delete this activity?')) return;
+  const list = S.activities.filter((_, k) => k !== window._ed.i);
+  await api('activities', { method: 'PUT', body: JSON.stringify(list) }); closeSheet();
+}
+
+// ---- live updates
+function connect() {
+  const ws = new WebSocket(new URL('api/events', location.href.replace(/^http/, 'ws')));
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'state') { const { type, ...rest } = m; S = rest; }
+    else if (m.type === 'gateway') { const k = S.gateways.findIndex(g => g.id === m.gateway.id); if (k >= 0) S.gateways[k] = m.gateway; else S.gateways.push(m.gateway); }
+    else if (m.type === 'running') { S.running = m.running; progress = {}; }
+    else if (m.type === 'step') progress[m.activity] = m;
+    else if (m.type === 'step_error') toast(`Step ${m.index + 1} failed: ${m.error}`.slice(0, 120));
+    else if (m.type === 'current') { S.current = m.current; S.running = null; progress = {}; }
+    else if (m.type === 'gw_event' && m.event.type === 'rx' && learning && !learning.code && learning.gw === m.gateway) {
+      learning.code = m.event.code; learnSheet(); return;
+    } else return;
+    render();
+  };
+  ws.onclose = () => setTimeout(connect, 1500);
+}
+showTab(location.hash.slice(1));
+connect();
+</script>
+</body>
+</html>
