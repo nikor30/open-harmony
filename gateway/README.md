@@ -40,12 +40,13 @@ pio run -t upload                # first time over USB (CH340, resets the board)
 tools/ota_upload.sh              # later, over Wi-Fi: POST /api/update with the password
 ```
 
-Updates need the password `OTA_PASS` from `secrets.h` (header
+Updates need the password `OTA_PASS` from `~/.config/open-harmony/open_harmony_secrets.h` (header
 `X-Update-Password`; the web UI asks for it). `pio run -e ota -t upload`
 (ArduinoOTA/espota) also works where the PC accepts the board's connection
 back; with an inbound-blocking firewall use `tools/ota_upload.sh`.
 
-`secrets.h` (git-ignored) may define `WIFI_SSID`/`WIFI_PASS` for the first
+`~/.config/open-harmony/open_harmony_secrets.h` (root-only, outside the repository, mode 600)
+may define `WIFI_SSID`/`WIFI_PASS` for the first
 start; without Wi-Fi the gateway opens the access point `IR-Gateway-Setup`
 (web UI at 192.168.4.1). Settings are kept in NVS, the library in
 LittleFS (`/db.json`, partition `littlefs`, 896 KB).

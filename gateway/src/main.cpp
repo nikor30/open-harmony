@@ -13,7 +13,7 @@
 //   (also the codes the Harmony 900 sends), and a "last code" sensor.
 //
 // Settings (Wi-Fi, MQTT, name) live in NVS (Preferences "gw"); the first
-// Wi-Fi comes from secrets.h if present, otherwise the gateway opens the
+// Wi-Fi comes from open_harmony_secrets.h if present, otherwise the gateway opens the
 // access point "IR-Gateway-Setup" with the web UI at 192.168.4.1.
 
 #include <Arduino.h>
@@ -35,8 +35,10 @@
 #include <mutex>
 #include "web_index.h"
 
-#if __has_include("../secrets.h")
-#include "../secrets.h"
+// Wi-Fi and update password: root-only file outside the repository,
+// /root/.config/open-harmony/open_harmony_secrets.h (include path set in platformio.ini)
+#if __has_include(<open_harmony_secrets.h>)
+#include <open_harmony_secrets.h>
 #endif
 #ifndef WIFI_SSID
 #define WIFI_SSID ""
