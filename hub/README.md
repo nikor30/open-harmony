@@ -13,6 +13,10 @@ wait, Blu-ray power via IR, receiver input via 433 MHz ...).
   tile to send, learn new commands with the original remote (the gateway
   hears it; the hub saves it into the gateway's library).
 - **Settings**: add/remove gateways by URL, export/import activities.
+- **Home Assistant select**: the hub mirrors the activities into an `input_select` helper
+  (`input_select.kino_aktivitat`, or `HUB_SELECT`; first option "Aus" = all off). It writes the options
+  and the current activity, and an option chosen in Home Assistant (dashboard, automation, voice)
+  switches the activity here. Create the helper once; without it the hub runs as before.
 
 Runs in the Home Assistant sidebar ("Remote") through ingress and uses the
 Supervisor token for the HA API. Data in `/data/hub.json`.
@@ -38,5 +42,4 @@ step_error, current, gw_event), `POST /api/gateways {url}`,
 `PUT /api/activities`, `POST /api/switch {activity|null}`,
 `POST /api/step` (run one step), `GET /api/ha/entities`, `GET /api/ha/services`.
 
-Next: activities as a Home Assistant `select` entity (MQTT), Harmony 900
-configuration (activities and buttons pushed to the remote's ohui).
+Next: Harmony 900 configuration (activities and buttons pushed to the remote's ohui).

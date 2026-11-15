@@ -31,6 +31,13 @@ else:
     tf = os.environ.get("HUB_HA_TOKEN_FILE")
     HA_TOKEN = Path(tf).read_text().strip() if tf else os.environ.get("HUB_HA_TOKEN", "")
 
+# Home Assistant helper that mirrors the activity both ways: the hub writes the options and the current
+# activity into it, and choosing an option in Home Assistant (dashboard, automation, voice) switches here.
+SELECT = os.environ.get("HUB_SELECT", "input_select.kino_aktivitat")
+OFF = "Aus"
+HA_WS = "ws://supervisor/core/websocket" if os.environ.get("SUPERVISOR_TOKEN") else \
+    re.sub(r"^http", "ws", HA_URL) + "/websocket" if HA_URL else ""
+
 # Domains offered in the activity editor; everything else is noise there.
 HA_DOMAINS = {"media_player", "light", "switch", "remote", "scene", "script", "input_boolean", "cover", "fan", "climate", "button"}
 
@@ -131,6 +138,7 @@ class Hub:
         self.clients = set()
         self.runner = None  # (activity id, task)
         self.http = None
+        self.select_task = None
 
     # ------------------------------------------------------------ plumbing
 
@@ -138,8 +146,12 @@ class Hub:
         self.http = aiohttp.ClientSession()
         for g in self.store.data["gateways"]:
             self.add_gateway(g)
+        if HA_WS and HA_TOKEN and SELECT:
+            self.select_task = asyncio.create_task(self.watch_select())
 
     async def stop(self, app):
+        if self.select_task:
+            self.select_task.cancel()
         for g in self.gateways.values():
             g.task.cancel()
         await self.http.close()
@@ -172,6 +184,56 @@ class Hub:
             if r.status >= 300:
                 raise web.HTTPBadGateway(text=f"Home Assistant: {r.status} {await r.text()}")
             return await r.json(content_type=None)
+
+    # ------------------------------------------------------------ Home Assistant select
+
+    def label(self, act_id):
+        return next((a["name"] for a in self.store.data["activities"] if a["id"] == act_id), OFF)
+
+    async def sync_select(self):
+        """Write the activity names and the current activity into the Home Assistant helper."""
+        if not (HA_URL and HA_TOKEN and SELECT):
+            return
+        try:
+            options = [OFF] + [a["name"] for a in self.store.data["activities"]]
+            await self.ha("POST", "/services/input_select/set_options", {"entity_id": SELECT, "options": options})
+            await self.ha("POST", "/services/input_select/select_option",
+                          {"entity_id": SELECT, "option": self.label(self.store.data["current"])})
+        except Exception as e:  # helper missing or Home Assistant restarting: the hub works without it
+            log.info("select %s: %s", SELECT, e)
+
+    async def watch_select(self):
+        """Follow the helper: an option chosen in Home Assistant switches the activity."""
+        while True:
+            try:
+                async with self.http.ws_connect(HA_WS, heartbeat=30) as ws:
+                    await ws.receive_json()
+                    await ws.send_json({"type": "auth", "access_token": HA_TOKEN})
+                    if (await ws.receive_json()).get("type") != "auth_ok":
+                        raise RuntimeError("Home Assistant refused the token")
+                    await ws.send_json({"id": 1, "type": "subscribe_trigger",
+                                        "trigger": {"platform": "state", "entity_id": SELECT}})
+                    await self.sync_select()
+                    async for msg in ws:
+                        if msg.type != aiohttp.WSMsgType.TEXT:
+                            continue
+                        ev = json.loads(msg.data)
+                        if ev.get("type") != "event":
+                            continue
+                        option = ev["event"]["variables"]["trigger"]["to_state"]["state"]
+                        target = next((a["id"] for a in self.store.data["activities"] if a["name"] == option), None)
+                        if target is None and option != OFF:
+                            continue  # unavailable/unknown, or an option this hub does not know
+                        wanted = self.runner[0] if self.runner else self.store.data["current"]
+                        if target != wanted:  # our own sync_select echoes back as "already there"
+                            log.info("Home Assistant selected %s", option)
+                            self.start_switch(target)
+                            await self.broadcast({"type": "running", "running": target})
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.info("Home Assistant websocket: %s", e)
+            await asyncio.sleep(10)
 
     # ------------------------------------------------------------ activities
 
@@ -215,6 +277,7 @@ class Hub:
         self.store.data["current"] = target
         self.store.save()
         await self.broadcast({"type": "current", "current": target, "ms": int((time.monotonic() - t0) * 1000)})
+        await self.sync_select()
 
     def start_switch(self, target):
         if self.runner:
@@ -313,6 +376,7 @@ async def put_activities(req):
     hub.store.data["activities"] = acts
     hub.store.save()
     await hub.broadcast({"type": "state", **hub.state()})
+    await hub.sync_select()
     return web.json_response(acts)
 
 
