@@ -24,12 +24,11 @@ wait, Blu-ray power via IR, receiver input via 433 MHz ...).
   `play`, `red`, `7`; the table `SAMSUNG_KEYS` in `app/hub.py` turns them into Samsung's codes) or are a
   Samsung code as it is (`KEY_POWER`). Keys without a meaning on the device are dropped. The connection
   is held so that a key goes out at once; after power-on it takes about half a minute.
-  **The device has to let the hub's computer in.** One that does not closes the connection (close reason
-  `notack`, at once or after up to half a minute); the hub then reports the player as `refused` and logs
-  it once. On a UBD-M9500 in Developer Mode only the developer's computer got in so far. Not known yet:
-  whether that is Developer Mode, or a permission to give on the device (settings: General, External
-  Device Manager, Device Connection Manager). Home Assistant's own Samsung integration is closed out the
-  same way and shows the device as off.
+  **The device has to allow the hub's computer once, on its own screen** (it asks, or in its settings:
+  General, External Device Manager, Device Connection Manager). Until then it closes the connection
+  (close reason `notack`, at once or after up to half a minute); the hub reports the player as `refused`
+  and logs it once. Home Assistant's own Samsung integration is closed out the same way and shows the
+  device as off; the permission is for the computer, so it then works too (measured on a UBD-M9500).
 
 Runs in the Home Assistant sidebar ("Remote") through ingress and uses the
 Supervisor token for the HA API. Data in `/data/hub.json`.
