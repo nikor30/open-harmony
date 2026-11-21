@@ -149,62 +149,46 @@ class Gateway:
 class Samsung:
     """Network remote of a Samsung player or TV (Tizen, port 8001).
 
-    While nobody is connected, its remote service works in a cycle of about half a minute: attempts hang
-    until the cycle ends, then those that came early in it are dropped and the later ones accepted. With one
-    client connected it answers at once. So attempts are started a few seconds apart until one is accepted,
-    and that connection is kept open for as long as the device is on.
+    One connection is kept open for as long as the device is on, so a key goes out at once. The device has to
+    allow this computer first: it asks on its screen at the first attempt (the attempt hangs until someone
+    answers or half a minute has passed), and it closes the connection of a computer it does not allow with
+    the reason "notack". Allowed devices are listed in its settings (Device Connection Manager).
     """
 
     def __init__(self, hub, cfg):
         self.hub, self.id, self.host = hub, cfg["id"], cfg["host"]
         self.ws = self.task = None
+        self.refused = False
 
     def view(self):
-        return {"id": self.id, "host": self.host, "online": self.ws is not None}
-
-    async def attempt(self, url):
-        """One connection attempt: the accepted websocket, or None."""
-        ws = None
-        try:
-            async with asyncio.timeout(45):
-                ws = await self.hub.http.ws_connect(url, heartbeat=20)
-                msg = await ws.receive()
-                if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data).get("event") == "ms.channel.connect":
-                    accepted, ws = ws, None
-                    return accepted
-        except Exception as e:  # off (no route), dropped, no answer
-            log.debug("player %s: %s", self.id, e or type(e).__name__)
-        finally:
-            if ws:
-                await ws.close()
+        return {"id": self.id, "host": self.host, "online": self.ws is not None, "refused": self.refused}
 
     async def run(self):
         url = f"ws://{self.host}:8001/api/v2/channels/samsung.remote.control?name=" + base64.b64encode(b"open-harmony").decode()
         while True:
-            tries, ws, n = set(), None, 0
             try:
-                while not ws:
-                    tries.add(asyncio.create_task(self.attempt(url)))
-                    n += 1
-                    await asyncio.sleep(4)  # the next one starts while this one may still hang
-                    for t in [t for t in tries if t.done()]:
-                        tries.discard(t)
-                        if t.result() and not ws:
-                            ws = t.result()
-                        elif t.result():  # two accepted in the same cycle
-                            await t.result().close()
-            finally:
-                for t in tries:
-                    t.cancel()
-            self.ws = ws
-            log.info("player %s: connected (attempt %d)", self.id, n)
-            try:
-                async for _ in ws:  # until it closes; the heartbeat ends it when the device is switched off
-                    pass
-            finally:
-                self.ws = None
-                await ws.close()
-            log.info("player %s: connection lost", self.id)
+                async with asyncio.timeout(45):
+                    ws = await self.hub.http.ws_connect(url, heartbeat=20)
+                    msg = await ws.receive()
+                try:
+                    if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data).get("event") == "ms.channel.connect":
+                        self.ws, self.refused = ws, False
+                        log.info("player %s: connected", self.id)
+                        async for _ in ws:  # until it closes; the heartbeat ends it when the device is switched off
+                            pass
+                        log.info("player %s: connection lost", self.id)
+                    elif not self.refused:  # once, not every five seconds
+                        self.refused = True
+                        log.warning("player %s: it is on but does not let the hub in. Allow this computer on the "
+                                    "device (Settings, General, External Device Manager, Device Connection Manager).", self.id)
+                finally:
+                    self.ws = None
+                    await ws.close()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # off (no route) or no answer
+                log.debug("player %s: %s", self.id, e or type(e).__name__)
+            await asyncio.sleep(5)
 
     async def key(self, key):
         code = SAMSUNG_KEYS.get(key) or (key if str(key).startswith("KEY_") else None)
