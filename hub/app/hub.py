@@ -152,12 +152,16 @@ class Samsung:
     One connection is kept open for as long as the device is on, so a key goes out at once. The device has to
     allow this computer once, on its own screen. Until then it closes the connection with the reason
     "notack", at once or after up to half a minute (measured on a UBD-M9500).
+
+    While a text field is open on the device, number keys do nothing there: text has to be sent as a whole.
+    The device says when a field opens and what is in it, so digits are added to that text instead.
     """
 
     def __init__(self, hub, cfg):
         self.hub, self.id, self.host = hub, cfg["id"], cfg["host"]
         self.ws = self.task = None
         self.refused = False
+        self.text = None  # what is in the device's open text field, None while there is none
 
     def view(self):
         return {"id": self.id, "host": self.host, "online": self.ws is not None, "refused": self.refused}
@@ -173,15 +177,16 @@ class Samsung:
                     if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data).get("event") == "ms.channel.connect":
                         self.ws, self.refused = ws, False
                         log.info("player %s: connected", self.id)
-                        async for _ in ws:  # until it closes; the heartbeat ends it when the device is switched off
-                            pass
+                        async for msg in ws:  # until it closes; the heartbeat ends it when the device is switched off
+                            if msg.type == aiohttp.WSMsgType.TEXT:
+                                self.heard(json.loads(msg.data))
                         log.info("player %s: connection lost", self.id)
                     elif not self.refused:  # once, not every five seconds
                         self.refused = True
                         log.warning("player %s: it is on but does not let the hub in. Allow this computer on the "
                                     "device (Settings, General, External Device Manager, Device Connection Manager).", self.id)
                 finally:
-                    self.ws = None
+                    self.ws = self.text = None
                     await ws.close()
             except asyncio.CancelledError:
                 raise
@@ -189,12 +194,28 @@ class Samsung:
                 log.debug("player %s: %s", self.id, e or type(e).__name__)
             await asyncio.sleep(5)
 
+    def heard(self, ev):
+        """Follow the device's text field: it opens, its text changes, it closes."""
+        name = ev.get("event")
+        if name == "ms.remote.imeStart":
+            self.text = ""
+        elif name == "ms.remote.imeUpdate":
+            self.text = base64.b64decode(ev.get("data") or "").decode("utf-8", "replace")
+        elif name == "ms.remote.imeEnd":
+            self.text = None
+
     async def key(self, key):
-        code = SAMSUNG_KEYS.get(key) or (key if str(key).startswith("KEY_") else None)
+        key = str(key)
+        code = SAMSUNG_KEYS.get(key) or (key if key.startswith("KEY_") else None)
         if not code:
             return  # a key this device has no use for
         if not self.ws:
             raise RuntimeError("not connected (off, or still starting)")
+        if self.text is not None and (key.isdigit() or key == "clear"):
+            self.text = self.text[:-1] if key == "clear" else self.text + key
+            await self.ws.send_json({"method": "ms.remote.control", "params": {
+                "Cmd": base64.b64encode(self.text.encode()).decode(), "DataOfCmd": "base64", "TypeOfRemote": "SendInputString"}})
+            return
         await self.ws.send_json({"method": "ms.remote.control", "params": {
             "Cmd": "Click", "DataOfCmd": code, "Option": "false", "TypeOfRemote": "SendRemoteKey"}})
 

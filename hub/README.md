@@ -24,6 +24,8 @@ wait, Blu-ray power via IR, receiver input via 433 MHz ...).
   `play`, `red`, `7`; the table `SAMSUNG_KEYS` in `app/hub.py` turns them into Samsung's codes) or are a
   Samsung code as it is (`KEY_POWER`). Keys without a meaning on the device are dropped. The connection
   is held so that a key goes out at once; after power-on it takes about half a minute.
+  While a text field is open on the device, number keys are added to its text (the device takes text only
+  as a whole and reports what the field holds); `clear` removes the last character.
   **The device has to allow the hub's computer once, on its own screen** (it asks, or in its settings:
   General, External Device Manager, Device Connection Manager). Until then it closes the connection
   (close reason `notack`, at once or after up to half a minute); the hub reports the player as `refused`
