@@ -149,9 +149,10 @@ class Gateway:
 class Samsung:
     """Network remote of a Samsung player or TV (Tizen, port 8001).
 
-    Its remote service answers in bursts while nobody is connected: an attempt hangs for up to half a minute
-    and is then accepted or dropped. With one client connected it answers at once. So one connection is kept
-    open for as long as the device is on, and a dropped attempt is repeated straight away.
+    While nobody is connected, its remote service works in a cycle of about half a minute: attempts hang
+    until the cycle ends, then those that came early in it are dropped and the later ones accepted. With one
+    client connected it answers at once. So attempts are started a few seconds apart until one is accepted,
+    and that connection is kept open for as long as the device is on.
     """
 
     def __init__(self, hub, cfg):
@@ -161,34 +162,49 @@ class Samsung:
     def view(self):
         return {"id": self.id, "host": self.host, "online": self.ws is not None}
 
+    async def attempt(self, url):
+        """One connection attempt: the accepted websocket, or None."""
+        ws = None
+        try:
+            async with asyncio.timeout(45):
+                ws = await self.hub.http.ws_connect(url, heartbeat=20)
+                msg = await ws.receive()
+                if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data).get("event") == "ms.channel.connect":
+                    accepted, ws = ws, None
+                    return accepted
+        except Exception as e:  # off (no route), dropped, no answer
+            log.debug("player %s: %s", self.id, e or type(e).__name__)
+        finally:
+            if ws:
+                await ws.close()
+
     async def run(self):
         url = f"ws://{self.host}:8001/api/v2/channels/samsung.remote.control?name=" + base64.b64encode(b"open-harmony").decode()
         while True:
-            t0 = time.monotonic()
+            tries, ws, n = set(), None, 0
             try:
-                ws = await asyncio.wait_for(self.hub.http.ws_connect(url, heartbeat=20), 45)
-                try:
-                    msg = await asyncio.wait_for(ws.receive(), 45)
-                    if msg.type != aiohttp.WSMsgType.TEXT or json.loads(msg.data).get("event") != "ms.channel.connect":
-                        raise RuntimeError(f"dropped ({msg.type.name})")
-                    self.ws = ws
-                    log.info("player %s: connected", self.id)
-                    async for _ in ws:  # until it closes; the heartbeat ends it when the device is switched off
-                        pass
-                    log.info("player %s: connection lost", self.id)
-                    t0 = time.monotonic()
-                finally:
-                    self.ws = None
-                    await ws.close()
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                waited = time.monotonic() - t0
-                # the device is on and let us wait: worth a line. Off (no route): quiet.
-                (log.info if waited > 5 else log.debug)("player %s: %s after %.0f s", self.id, e or type(e).__name__, waited)
-                if waited > 5:
-                    continue
-            await asyncio.sleep(3)
+                while not ws:
+                    tries.add(asyncio.create_task(self.attempt(url)))
+                    n += 1
+                    await asyncio.sleep(4)  # the next one starts while this one may still hang
+                    for t in [t for t in tries if t.done()]:
+                        tries.discard(t)
+                        if t.result() and not ws:
+                            ws = t.result()
+                        elif t.result():  # two accepted in the same cycle
+                            await t.result().close()
+            finally:
+                for t in tries:
+                    t.cancel()
+            self.ws = ws
+            log.info("player %s: connected (attempt %d)", self.id, n)
+            try:
+                async for _ in ws:  # until it closes; the heartbeat ends it when the device is switched off
+                    pass
+            finally:
+                self.ws = None
+                await ws.close()
+            log.info("player %s: connection lost", self.id)
 
     async def key(self, key):
         code = SAMSUNG_KEYS.get(key) or (key if str(key).startswith("KEY_") else None)
