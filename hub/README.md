@@ -23,9 +23,9 @@ wait, Blu-ray power via IR, receiver input via 433 MHz ...).
   `device` (the id given in `PUT /api/players`) and `key`. Keys have plain names (`up`, `ok`, `back`,
   `play`, `red`, `7`; the table `SAMSUNG_KEYS` in `app/hub.py` turns them into Samsung's codes) or are a
   Samsung code as it is (`KEY_POWER`). Keys without a meaning on the device are dropped. The connection
-  is held because the device's remote service sleeps: the first connection wakes it and is dropped after
-  about 20 s, the next one is accepted (measured on a UBD-M9500; this is also why Home Assistant's own
-  integration shows such a device as off). After power-on it takes about half a minute.
+  is held because the device's remote service answers in bursts while nobody is connected: an attempt
+  hangs for up to half a minute and is then accepted or dropped (measured on a UBD-M9500; this is also why
+  Home Assistant's own integration shows such a device as off). After power-on it takes up to a minute.
 
 Runs in the Home Assistant sidebar ("Remote") through ingress and uses the
 Supervisor token for the HA API. Data in `/data/hub.json`.

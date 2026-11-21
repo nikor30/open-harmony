@@ -149,8 +149,9 @@ class Gateway:
 class Samsung:
     """Network remote of a Samsung player or TV (Tizen, port 8001).
 
-    Its remote service sleeps. The first connection wakes it and is dropped after about 20 s; one made right
-    after that is accepted and stays. So one connection is kept open for as long as the device is on.
+    Its remote service answers in bursts while nobody is connected: an attempt hangs for up to half a minute
+    and is then accepted or dropped. With one client connected it answers at once. So one connection is kept
+    open for as long as the device is on, and a dropped attempt is repeated straight away.
     """
 
     def __init__(self, hub, cfg):
@@ -165,19 +166,29 @@ class Samsung:
         while True:
             t0 = time.monotonic()
             try:
-                async with self.hub.http.ws_connect(url, heartbeat=20) as ws:
-                    async for msg in ws:
-                        if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data).get("event") == "ms.channel.connect":
-                            self.ws = ws
-                            log.info("player %s: connected", self.id)
+                ws = await asyncio.wait_for(self.hub.http.ws_connect(url, heartbeat=20), 45)
+                try:
+                    msg = await asyncio.wait_for(ws.receive(), 45)
+                    if msg.type != aiohttp.WSMsgType.TEXT or json.loads(msg.data).get("event") != "ms.channel.connect":
+                        raise RuntimeError(f"dropped ({msg.type.name})")
+                    self.ws = ws
+                    log.info("player %s: connected", self.id)
+                    async for _ in ws:  # until it closes; the heartbeat ends it when the device is switched off
+                        pass
+                    log.info("player %s: connection lost", self.id)
+                    t0 = time.monotonic()
+                finally:
+                    self.ws = None
+                    await ws.close()
             except asyncio.CancelledError:
                 raise
-            except Exception as e:  # off (no route), asleep, switching off
-                log.debug("player %s: %s", self.id, e)
-            if self.ws:
-                log.info("player %s: connection lost", self.id)
-            self.ws = None
-            await asyncio.sleep(1 if time.monotonic() - t0 > 5 else 3)   # it was just woken: try again at once
+            except Exception as e:
+                waited = time.monotonic() - t0
+                # the device is on and let us wait: worth a line. Off (no route): quiet.
+                (log.info if waited > 5 else log.debug)("player %s: %s after %.0f s", self.id, e or type(e).__name__, waited)
+                if waited > 5:
+                    continue
+            await asyncio.sleep(3)
 
     async def key(self, key):
         code = SAMSUNG_KEYS.get(key) or (key if str(key).startswith("KEY_") else None)
