@@ -207,13 +207,15 @@ static void dr_circle(int cx, int cy, int r, unsigned c, int a)
 	dr_rrect(cx - r, cy - r, cx + r - 1, cy + r - 1, r, c, a);
 }
 
-/* thick line from (x1,y1) to (x2,y2), width w, round caps */
+/* thick line from (x1,y1) to (x2,y2), width w, round caps.
+ * No division: the CPU has none, and this runs 16 times per pixel. */
 static void dr_line(int x1, int y1, int x2, int y2, int w, unsigned c, int a)
 {
 	int bx1 = (x1 < x2 ? x1 : x2) - w, bx2 = (x1 > x2 ? x1 : x2) + w;
 	int by1 = (y1 < y2 ? y1 : y2) - w, by2 = (y1 > y2 ? y1 : y2) + w;
 	int dx = (x2 - x1) * 8, dy = (y2 - y1) * 8, len2 = dx * dx + dy * dy;
 	int r2 = w * w * 16;		/* (w/2 * 8)^2 */
+	long long lim = (long long)r2 * len2;
 	int x, y, sx, sy;
 
 	for (y = by1; y <= by2; y++)
@@ -222,13 +224,15 @@ static void dr_line(int x1, int y1, int x2, int y2, int w, unsigned c, int a)
 			for (sy = 0; sy < 4; sy++)
 				for (sx = 0; sx < 4; sx++) {
 					int px = (x - x1) * 8 + sx * 2 + 1, py = (y - y1) * 8 + sy * 2 + 1;
-					int t = len2 ? (px * dx + py * dy) : 0, ex, ey;
-					if (t < 0) t = 0;
-					if (t > len2) t = len2;
-					ex = px - (len2 ? dx * t / len2 : 0);
-					ey = py - (len2 ? dy * t / len2 : 0);
-					if (ex * ex + ey * ey <= r2)
-						n++;
+					int t = px * dx + py * dy;	/* where along the line, 0..len2 */
+					if (t <= 0) {
+						n += px * px + py * py <= r2;
+					} else if (t >= len2) {
+						n += (px - dx) * (px - dx) + (py - dy) * (py - dy) <= r2;
+					} else {	/* distance from the line, both sides times len2 */
+						int cr = px * dy - py * dx;
+						n += (long long)cr * cr <= lim;
+					}
 				}
 			if (n)
 				dr_pixel(x, y, c, n * a >> 4);

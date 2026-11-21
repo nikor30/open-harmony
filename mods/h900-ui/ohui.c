@@ -1,13 +1,23 @@
 /* Harmony 900: native user interface (replaces the Flash UI).
  *
- * Reads activities and devices from data_srv (GET /userconfig) and talks to
- * hao on 127.0.0.1:1100 like the Flash UI does (XML events terminated by a
- * zero byte):
- *   StartActivity <Id>    activity cards and power off (Id -1)
- *   SendIR <ActionId>     hard keys (activity "HardButtons", or on a device
- *                         screen the device's own commands), soft buttons
- *   SendChannel <Channel> favourite channels of an activity
- * hao's Queue/ReceiverLinkDown replies drive the status pill.
+ * Version 9 is a stateless remote for a home cinema run by Home Assistant:
+ * the home screen is the foyer of the HA "Kino" panel: in front of the
+ * curtain one large ticket per activity, one per page, with "end the show"
+ * below. A swipe left or right (or a side arrow key) turns the page, a tap
+ * on the ticket starts it; the last page holds Settings and Classic UI.
+ * A ticket, the end button and
+ * every hard key send one infrared code and nothing else:
+ *   NEC  4F 48 <code> <~code>     code 0x10 = off, 0x11.. = activities,
+ *                                 0x80 | scancode = hard key
+ * An IR gateway hears it and Home Assistant decides what the key means for
+ * the activity that runs. The codes are not in the remote's Logitech
+ * configuration; apply.py adds a "SendCode" event to hao (HAO.lua) that
+ * sends a protocol code as it is (XML events to 127.0.0.1:1100, terminated
+ * by a zero byte). The frame around the four bytes is the one of the NEC
+ * protocol in this remote's configuration (protocol 4).
+ *
+ * The device and activity screens of version 8 (userconfig, SendIR,
+ * SendChannel) are still in this file but not reachable.
  *
  * Screens form a stack (Activities > activity, Activities > Devices >
  * device, Activities > Settings) that slides with a critically damped
@@ -19,7 +29,7 @@
  *
  * Hardware: the LEDs behind the four soft buttons show what they do now
  * (under-left white = back, under-right orange = open the running activity,
- * side arrows white = page up/down possible), set through data_srv like the
+ * side arrows white = a page that way), set through data_srv like the
  * Flash UI does (/system/leftbottombutton etc., 0 off, 1 white, 2 orange).
  * Charging comes from env_get_charger_state, the battery level (0..8) from
  * env_get_battery_level. With sounds on (/system/sound), the buzzer ticks
@@ -34,7 +44,9 @@
  * if ohui fails. Log: /usr/local/cache/ohui.log. */
 #include <ohdraw.h>
 
-#define VERSION		"8"
+void *memcpy(void *, const void *, __SIZE_TYPE__);
+
+#define VERSION		"10"
 #define POLL_MS		10
 #define FRAME_MS	33
 #define REPEAT_DELAY	400
@@ -68,6 +80,19 @@
 
 static const unsigned tints[] = { 0x0a84ff, 0xbf5af2, 0xff9f0a, 0x64d2ff, 0x30d158, 0xff375f };
 
+/* the tickets of the Kino panel: name, stub text, gradient (cm: middle stop or 0), IR code */
+static const struct kino { const char *name, *stub; unsigned c1, cm, c2; int code; } kino[] = {
+	{"Film", "Blu-ray 4K", 0xe3241b, 0, 0xff8a1f, 0x11},
+	{"Apple TV", "Streamen", 0x5e4be0, 0, 0xc058f3, 0x12},
+	{"Spiel", "Retro-Gaming", 0x0a6cf0, 0, 0x39c4f5, 0x13},
+	{"PS3 3D", "3D-Brille", 0xff2d55, 0xa23bd1, 0x19b5ab, 0x14},
+};
+#define NKINO		((int)(sizeof(kino) / sizeof(kino[0])))
+#define KINO_OFF	0x10
+#define C_GOLD		0xffcc66
+#define C_CREAM		0xfff7ec
+#define C_ROOM		0x09060a	/* the dark the curtain falls into */
+
 struct hard { char name[16]; char action[48]; };
 struct cmd { char label[24]; char action[48]; int pos; };
 struct chan { char station[20]; char number[8]; };
@@ -91,7 +116,8 @@ static struct activity act[MAXACT];
 static int nact;
 static struct device dev[MAXDEV];
 static int ndev;
-static int running = -1;	/* activity hao last started */
+static int running = -1;	/* ticket last tapped (the remote cannot see what really runs) */
+static long sent_t;		/* when the last code went out (lamp) */
 static int hao = -1;
 static char rx[8192];
 static int rxlen;
@@ -134,15 +160,16 @@ struct screen {
 static struct screen stack[4];
 static int depth;		/* index of the top screen */
 static struct spring nav;	/* depth * gfx_w * 256 when settled */
+static struct spring pager;	/* home: page * PG_STEP * 256 when settled */
 
 /* touch */
 enum { T_NONE, T_ACT, T_POWER, T_CLASSIC, T_BACK, T_SOFT, T_CHAN, T_DEVICES, T_DEV, T_CMD,
        T_SETTINGS, T_SLIDER, T_SEG, T_SOUND };
-enum { G_NONE, G_TAP, G_SCROLL, G_EDGE, G_SLIDER };
+enum { G_NONE, G_TAP, G_SCROLL, G_EDGE, G_SLIDER, G_PAGE };
 static int press_kind = T_NONE, press_index;
 static long press_t;		/* when the press may show */
 static int gesture = G_NONE;
-static int g_x0, g_y0, g_sy0, g_grab;
+static int g_x0, g_y0, g_sy0, g_grab, g_p0;
 #define NHIST 6
 static int h_x[NHIST], h_y[NHIST], h_n;
 static long h_t[NHIST];
@@ -511,17 +538,21 @@ static unsigned device_tint(const struct device *d)
 #define TILE_H		38
 #define TILE_STEP	44
 
-static int has_power_bar(const struct screen *s) { return s->kind <= S_ACT && power_off_index() >= 0; }
+static int has_power_bar(const struct screen *s) { return s->kind == S_HOME; }
 static int has_nav(const struct screen *s) { return s->kind != S_HOME; }
 static int content_top(const struct screen *s) { return STATUS_H + (has_nav(s) ? NAV_H : 0); }
 static int content_bottom(const struct screen *s) { return has_power_bar(s) ? POWER_Y - 6 : gfx_h - 1; }
 
 /* home content */
-#define H_TITLE		36
-#define H_CARD(i)	(52 + (i) * CARD_STEP)
-#define H_MORE		(H_CARD(n_activities()) + 18)	/* section label baseline */
+#define TK_X1		22		/* the ticket of a page; its neighbours peek in at the sides */
+#define TK_X2		(gfx_w - 23)
+#define TK_Y1		8
+#define TK_Y2		226
+#define PG_STEP		(TK_X2 - TK_X1 + 13)
+#define NPAGE		(NKINO + 1)	/* the tickets, then More */
+#define PG_DOTS_Y	(POWER_Y - 13)
+#define H_MORE		70		/* section label baseline */
 #define H_ROW(i)	(H_MORE + 8 + (i) * ROW_H)
-/* activity / device content */
 #define A_TITLE		30
 #define A_SECTION1	46
 #define A_TILE_Y(i)	(56 + ((i) >> 1) * TILE_STEP)
@@ -554,11 +585,13 @@ static int seg_x(int i)
 	return M + 2 + i * w;
 }
 
+static int home_page(void) { return pager.target / (PG_STEP << 8); }
+
 /* control under screen point (x, y) on the top screen */
 static void hit(int x, int y, int slop, int *kind, int *index)
 {
 	struct screen *s = &stack[depth];
-	int i, cy, n;
+	int i, cy;
 
 	*kind = T_NONE;
 	*index = 0;
@@ -576,16 +609,19 @@ static void hit(int x, int y, int slop, int *kind, int *index)
 	cy = y - content_top(s) + (s->sy >> 8);
 	switch (s->kind) {
 	case S_HOME:
-		n = n_activities();
-		for (i = 0; i < n; i++)
-			if (in(x, cy, M, H_CARD(i), gfx_w - M, H_CARD(i) + CARD_H - 1, slop)) {
+		i = home_page();
+		if (pager.x - pager.target > 8 << 8 || pager.target - pager.x > 8 << 8)
+			return;		/* still turning the page */
+		if (i < NKINO) {
+			if (in(x, cy, TK_X1, TK_Y1, TK_X2, TK_Y2, slop > 3 ? 3 : slop)) {
 				*kind = T_ACT;
 				*index = i;
-				return;
 			}
-		for (i = 0; i < 3; i++)
+			return;
+		}
+		for (i = 0; i < 2; i++)
 			if (in(x, cy, M, H_ROW(i), gfx_w - M, H_ROW(i) + ROW_H - 1, slop > 4 ? 4 : slop)) {
-				*kind = i == 0 ? T_DEVICES : i == 1 ? T_SETTINGS : T_CLASSIC;
+				*kind = i == 0 ? T_SETTINGS : T_CLASSIC;
 				return;
 			}
 		return;
@@ -717,24 +753,35 @@ static void draw_status_bar(void)
 	}
 }
 
+/* "end the show": smoked glass with a bright top edge, faint while nothing runs */
 static void draw_power_bar(void)
 {
-	const char *t = "Power Off";
-	int w = dr_text_width(&font_button, t, 0) + 24, y, x;
+	const char *t = "Vorstellung beenden";
+	int w = dr_text_width(&font_button, t, 0) + 24, y, x, a = running >= 0 ? 256 : 120;
 
 	for (y = POWER_Y - 16; y < POWER_Y - 6; y++)	/* content fades out above the bar */
-		dr_hspan(0, gfx_w - 1, y, C_BG, (y - (POWER_Y - 16)) * 26);
-	dr_fill(0, POWER_Y - 6, gfx_w - 1, gfx_h - 1, C_BG, 256);
-	dr_rrect(M, POWER_Y, gfx_w - 1 - M, POWER_Y + POWER_H - 1, 12,
-		 pressed(T_POWER, 0) ? C_RED_BG_HI : C_RED_BG, 256);
+		dr_hspan(0, gfx_w - 1, y, C_ROOM, (y - (POWER_Y - 16)) * 26);
+	dr_fill(0, POWER_Y - 6, gfx_w - 1, gfx_h - 1, C_ROOM, 256);
+	dr_rrect(M, POWER_Y, gfx_w - 1 - M, POWER_Y + POWER_H - 1, 12, 0xffffff, 44);
+	dr_rrect(M + 1, POWER_Y + 1, gfx_w - 2 - M, POWER_Y + POWER_H - 2, 11,
+		 pressed(T_POWER, 0) ? 0x43323a : 0x241a1e, 256);
+	dr_hspan(M + 12, gfx_w - 1 - M - 12, POWER_Y, 0xffffff, 40);
 	x = (gfx_w - w) / 2;
-	icon_power(x + 8, POWER_Y + 20, C_RED, 256);
-	dr_text(&font_button, x + 24, POWER_Y + 26, t, 0, C_RED, 256);
+	icon_power(x + 8, POWER_Y + 20, 0xff6961, a);
+	dr_text(&font_button, x + 24, POWER_Y + 26, t, 0, C_CREAM, a);
+	/* page dots: the page shown is bright, the ticket that runs is gold */
+	for (y = 0; y < NPAGE; y++) {
+		int here = y == ((pager.x >> 8) + PG_STEP / 2) / PG_STEP;
+		dr_circle(gfx_w / 2 - (NPAGE - 1) * 6 + y * 12, PG_DOTS_Y, here ? 3 : 2,
+			  y == running ? C_GOLD : 0xffffff, here || y == running ? 256 : 90);
+	}
+	if (now - sent_t < 400)	/* a code just went out */
+		dr_circle(gfx_w - M - 8, PG_DOTS_Y, 3, C_GOLD, 256);
 }
 
 static const char *back_label(const struct screen *s)
 {
-	return s->kind == S_DEVICE ? "Devices" : "Activities";
+	return s->kind == S_DEVICE ? "Devices" : "Kino";
 }
 
 static void draw_nav(const struct screen *s, const char *title)
@@ -861,21 +908,187 @@ static void row(int y, int first, int last, int hi, int icon, unsigned icon_bg, 
 	chevron_right(gfx_w - M - 14, y + 22, C_TEXT3, 256);
 }
 
+/* ---- Kino home: the foyer of the Home Assistant panel ---- */
+
+/* red curtain folds at the top that fall into the dark of the room; built
+ * once (dithered to RGB565), it stays in place while the content scrolls */
+static unsigned short curtain[320 * 240];
+
+static void curtain_init(void)
+{
+	static const unsigned char bayer[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
+	int x, y, h1 = gfx_h * 30 / 100, h2 = gfx_h * 80 / 100;
+
+	for (y = 0; y < gfx_h && y < 320; y++) {
+		int t = y * 256 / (gfx_h * 6 / 10);
+		unsigned base = dr_mix(0xa3121f, 0x5c0911, t > 256 ? 256 : t);
+		int dark = y < h1 ? 80 * y / h1 : y < h2 ? 80 + 176 * (y - h1) / (h2 - h1) : 256;
+		for (x = 0; x < gfx_w && x < 240; x++) {
+			int p = x % 58, w = p < 26 ? p * 256 / 26 : (58 - p) * 256 / 32;	/* fold: 0 valley, 256 ridge */
+			unsigned c = dr_mix(base, 0x000000, 107 * (256 - w) >> 8);
+			int d = bayer[(y & 3) * 4 + (x & 3)], r, g, b;
+			c = dr_mix(dr_mix(c, 0xffffff, 18 * w >> 8), C_ROOM, dark);
+			r = ((c >> 16) & 255) + (d >> 1);
+			g = ((c >> 8) & 255) + (d >> 2);
+			b = (c & 255) + (d >> 1);
+			if (r > 255) r = 255;
+			if (g > 255) g = 255;
+			if (b > 255) b = 255;
+			curtain[y * 240 + x] = RGB((unsigned)(r << 16 | g << 8 | b));
+		}
+	}
+}
+
+static void draw_curtain(void)
+{
+	int x1 = dr_cx1 > dr_ox ? dr_cx1 : dr_ox, x2 = dr_cx2 < dr_ox + 239 ? dr_cx2 : dr_ox + 239, y;
+
+	for (y = dr_cy1; y <= dr_cy2 && y < 320 && x1 <= x2; y++)
+		memcpy(&dr_px[y * dr_stride + x1], &curtain[y * 240 + x1 - dr_ox], (x2 - x1 + 1) * 2);
+}
+
+/* rounded rectangle with a gradient c1 (cm) c2 from top-left to bottom-right. Every row is the same run of
+ * colours one pixel further along, so the run is worked out once and the rows are copied from it. */
+static void grad_rrect(int x1, int y1, int x2, int y2, int r, unsigned c1, unsigned cm, unsigned c2)
+{
+	static unsigned run[240 + 320];
+	static unsigned short run16[240 + 320];
+	const unsigned char *cov = dr_corner(r);
+	int span = x2 - x1 + y2 - y1, t, i, y;
+
+	if (span <= 0 || span >= 240 + 320)
+		return;
+	for (t = 0; t <= span; t++) {
+		int k = t * 256 / span;
+		run[t] = !cm ? dr_mix(c1, c2, k) : k < 133 ? dr_mix(c1, cm, k * 256 / 133) : dr_mix(cm, c2, (k - 133) * 256 / 123);
+		run16[t] = RGB(run[t]);
+	}
+	for (y = y1; y <= y2; y++) {
+		int j = y - y1 < r ? y - y1 : y2 - y < r ? y2 - y : -1, in = j < 0 ? 0 : r;
+		int a = x1 + in + dr_ox, b = x2 - in + dr_ox, sy = y + dr_oy;
+		const unsigned short *src = run16 + in + y - y1;
+
+		for (i = 0; i < in; i++) {	/* corners, anti-aliased */
+			dr_pixel(x1 + i, y, run[i + y - y1], cov[j * r + i] << 4);
+			dr_pixel(x2 - i, y, run[x2 - i - x1 + y - y1], cov[j * r + i] << 4);
+		}
+		if (sy < dr_cy1 || sy > dr_cy2)
+			continue;
+		if (a < dr_cx1) {
+			src += dr_cx1 - a;
+			a = dr_cx1;
+		}
+		if (b > dr_cx2)
+			b = dr_cx2;
+		if (a <= b)
+			memcpy(&dr_px[sy * dr_stride + a], src, (b - a + 1) * 2);
+	}
+}
+
+/* ticket icons, k times the size of the drawing */
+static void icon_clapper(int cx, int cy, int k)
+{
+	int i;
+
+	dr_rrect(cx - 12 * k, cy - 2 * k, cx + 12 * k, cy + 11 * k, 3 * k, 0xffffff, 256);
+	dr_rrect(cx - 12 * k, cy - 11 * k, cx + 12 * k, cy - 5 * k, 2 * k, 0xffffff, 256);
+	for (i = -8; i <= 8; i += 8)
+		dr_line(cx + (i - 2) * k, cy - 5 * k, cx + (i + 2) * k, cy - 11 * k, 3 * k, 0x000000, 120);
+}
+
+static void icon_apple(int cx, int cy, int k)
+{
+	dr_circle(cx - 4 * k, cy, 7 * k, 0xffffff, 256);
+	dr_circle(cx + 4 * k, cy, 7 * k, 0xffffff, 256);
+	dr_circle(cx - 3 * k, cy + 6 * k, 6 * k, 0xffffff, 256);
+	dr_circle(cx + 3 * k, cy + 6 * k, 6 * k, 0xffffff, 256);
+	dr_line(cx + k, cy - 8 * k, cx + 5 * k, cy - 12 * k, 3 * k, 0xffffff, 256);
+}
+
+static void icon_invader(int cx, int cy, int k)
+{
+	static const unsigned short rows[8] = { 0x104, 0x088, 0x1fc, 0x376, 0x7ff, 0x5fd, 0x505, 0x0d8 };
+	int x, y;
+
+	k *= 3;
+	for (y = 0; y < 8; y++)
+		for (x = 0; x < 11; x++)
+			if (rows[y] & (0x400 >> x))
+				dr_fill(cx + (2 * x - 11) * k / 2, cy + (y - 4) * k,
+					cx + (2 * x - 11) * k / 2 + k - 1, cy + (y - 3) * k - 1, 0xffffff, 256);
+}
+
+/* 3D glasses, one lens red and one cyan */
+static void icon_glasses(int cx, int cy, int k)
+{
+	dr_rrect(cx - 13 * k, cy - 6 * k, cx + 13 * k, cy + 6 * k, 3 * k, 0xffffff, 256);
+	dr_rrect(cx - 11 * k, cy - 4 * k, cx - 2 * k, cy + 4 * k, 2 * k, 0xff3b30, 256);
+	dr_rrect(cx + 2 * k, cy - 4 * k, cx + 11 * k, cy + 4 * k, 2 * k, 0x19c3d6, 256);
+}
+
+/* colour of the curtain at a point of the home screen's content */
+static unsigned curtain_at(int x, int y)
+{
+	unsigned short p;
+
+	x = x < 0 ? 0 : x > 239 ? 239 : x;
+	y += dr_oy;
+	p = curtain[(y < 0 ? 0 : y > 319 ? 319 : y) * 240 + x];
+	return (p & 0xf800) << 8 | (p & 0x07e0) << 5 | (p & 0x001f) << 3;
+}
+
+/* admission ticket, one to a page: colour body, perforation with two punched notches, stub underneath */
+static void ticket(int i, int hi)
+{
+	const struct kino *k = &kino[i];
+	int in = hi ? 3 : 0, x1 = TK_X1 + in, y1 = TK_Y1 + in, x2 = TK_X2 - in, y2 = TK_Y2 - in;
+	int cx = (x1 + x2 + 1) / 2, py = y2 - 44, x;
+	const char *stub = running == i ? "L\xc3\xa4uft gerade" : k->stub;
+
+	if (running == i) {	/* white frame */
+		dr_rrect(x1, y1, x2, y2, 20, 0xffffff, 256);
+		grad_rrect(x1 + 4, y1 + 4, x2 - 4, y2 - 4, 16, k->c1, k->cm, k->c2);
+	} else {
+		grad_rrect(x1, y1, x2, y2, 20, k->c1, k->cm, k->c2);
+	}
+	switch (i) {
+	case 0: icon_clapper(cx, y1 + 68, 3); break;
+	case 1: icon_apple(cx, y1 + 64, 3); break;
+	case 2: icon_invader(cx, y1 + 66, 2); break;
+	default: icon_glasses(cx, y1 + 66, 3);
+	}
+	dr_text(&font_title, cx - dr_text_width(&font_title, k->name, -1) / 2, py - 18, k->name, -1, 0xffffff, 256);
+	for (x = x1 + 16; x + 5 <= x2 - 16; x += 10)
+		dr_fill(x, py, x + 5, py + 1, 0xffffff, 128);
+	{	/* notches show the curtain behind; only the half inside the ticket is drawn */
+		int c1 = dr_cx1, c2 = dr_cx2;
+		dr_clip(x1 + dr_ox > c1 ? x1 + dr_ox : c1, dr_cy1, x2 + dr_ox < c2 ? x2 + dr_ox : c2, dr_cy2);
+		dr_circle(x1, py + 1, 9, curtain_at(x1 + dr_ox, py), 256);
+		dr_circle(x2 + 1, py + 1, 9, curtain_at(x2 + dr_ox, py), 256);
+		dr_clip(c1, dr_cy1, c2, dr_cy2);
+	}
+	dr_text(&font_button, cx - dr_text_width(&font_button, stub, 0) / 2, y2 - 15, stub, 0, 0xffffff, 235);
+}
+
 static void draw_home(struct screen *s)
 {
-	int n = n_activities(), i;
-	char sub[24];
+	int i, ox = dr_ox;
 
-	dr_text(&font_title, M, H_TITLE, "Activities", -1, C_TEXT, 256);
-	for (i = 0; i < n; i++)
-		card(H_CARD(i), tints[i % 6], act[i].label, i == running ? "Running" : "Tap to start",
-		     i == running ? C_GREEN : C_TEXT2, i == running, pressed(T_ACT, i));
-	section(H_MORE, "More");
-	cat(sub, catnum(sub, 0, ndev), "");
-	row(H_ROW(0), 1, 0, pressed(T_DEVICES, 0), 0, 0x0a84ff, "Devices", sub);
-	row(H_ROW(1), 0, 0, pressed(T_SETTINGS, 0), 1, 0x636366, "Settings", NULL);
-	row(H_ROW(2), 0, 1, pressed(T_CLASSIC, 0), 2, 0x48484a, "Classic UI", NULL);
-	s->content_h = H_ROW(3) + 8;
+	for (i = 0; i < NPAGE; i++) {
+		int off = i * PG_STEP - (pager.x >> 8);
+		if (TK_X2 + off < 0 || TK_X1 + off >= gfx_w)
+			continue;
+		dr_ox = ox + off;
+		if (i < NKINO) {
+			ticket(i, pressed(T_ACT, i));
+			continue;
+		}
+		dr_text(&font_caption, M + 4, H_MORE, "MORE", 1, 0x9a8f8a, 256);
+		row(H_ROW(0), 1, 0, pressed(T_SETTINGS, 0), 1, 0x636366, "Settings", NULL);
+		row(H_ROW(1), 0, 1, pressed(T_CLASSIC, 0), 2, 0x48484a, "Classic UI", NULL);
+	}
+	dr_ox = ox;
+	s->content_h = 0;	/* pages, no scrolling */
 }
 
 static void draw_activity(struct screen *s)
@@ -990,8 +1203,11 @@ static void draw_screen(struct screen *s)
 	int top = content_top(s), bottom = content_bottom(s), y, i;
 	int cx1 = dr_cx1, cx2 = dr_cx2;		/* horizontal clip set by the caller */
 
-	dr_fill(0, 0, gfx_w - 1, gfx_h - 1, C_BG, 256);
+	if (s->kind != S_HOME)		/* home: curtain, status bar and power bar cover the screen */
+		dr_fill(0, 0, gfx_w - 1, gfx_h - 1, C_BG, 256);
 	dr_clip(cx1, top, cx2, bottom);
+	if (s->kind == S_HOME)
+		draw_curtain();
 	wash(s);
 	dr_oy = top - (s->sy >> 8);
 	switch (s->kind) {
@@ -1226,6 +1442,11 @@ static void page(int dir)
 	int pg = content_bottom(s) - content_top(s) - 40, mx = scroll_max(s);
 	int t = ((s->snapping ? s->st : s->sy) >> 8) + dir * pg;
 
+	if (s->kind == S_HOME) {
+		t = home_page() + dir;
+		pager.target = (t < 0 ? 0 : t >= NPAGE ? NPAGE - 1 : t) * PG_STEP << 8;
+		return;
+	}
 	if (t < 0) t = 0;
 	if (t > mx) t = mx;
 	s->st = t << 8;
@@ -1492,9 +1713,14 @@ static void update_leds(void)
 		return;
 	if (gesture == G_SCROLL || s->sv)
 		return;			/* not while the list moves */
+	if (s->kind == S_HOME) {	/* side arrows: a page that way */
+		if (!set_led(LED_UNDER_L, 0) && !set_led(LED_UNDER_R, 0) && !set_led(LED_LEFT, home_page() > 0))
+			set_led(LED_RIGHT, home_page() < NPAGE - 1);
+		return;
+	}
 	/* at most one change per loop, so input never waits for data_srv */
 	if (set_led(LED_UNDER_L, depth > 0 ? 1 : 0) ||
-	    set_led(LED_UNDER_R, depth == 0 && running >= 0 ? 2 : 0) ||
+	    set_led(LED_UNDER_R, 0) ||
 	    set_led(LED_LEFT, mx > 0 && (s->sy >> 8) > 0 ? 1 : 0))
 		return;
 	set_led(LED_RIGHT, mx > 0 && (s->sy >> 8) < mx ? 1 : 0);
@@ -1523,71 +1749,37 @@ static void set_status(const char *s, unsigned c)
 	status_color = c;
 }
 
-static void start_activity(int i)
+/* one key or activity as NEC 4F 48 <code> <~code>, sent by the patched hao */
+static void send_code(int code)
 {
-	if (i == running) {	/* already on: just show it */
-		if (stack[depth].kind != S_ACT)
-			push(S_ACT, i);
-		return;
-	}
-	logs("start activity ", act[i].label);
-	send_event("StartActivity", "Id", act[i].id);
-	if (act[i].id[0] == '-') {
-		running = -1;
-		set_status("Powering off", C_YELLOW);
-		pop_to(0);
-	} else {
-		running = i;
-		set_status("Starting", C_YELLOW);
-		if (stack[depth].kind != S_ACT || stack[depth].index != i)
-			push(S_ACT, i);
-	}
+	static const char hex[] = "0123456789ABCDEF";
+	char c[40];
+	int k = cat(c, 0, "0400F4010101004F48");
+
+	c[k++] = hex[code >> 4];
+	c[k++] = hex[code & 15];
+	c[k++] = hex[(code ^ 0xff) >> 4];
+	c[k++] = hex[(code ^ 0xff) & 15];
+	c[k] = 0;
+	cat(c, k, "010100");
+	send_event("SendCode", "Code", c);
+	sent_t = now;
 }
 
-/* hard key: device commands on a device screen, else the running activity */
+/* ticket i, or -1 to end the show. Sent twice: infrared is one-way, and
+ * choosing the activity that already runs changes nothing in Home Assistant */
+static void kino_select(int i)
+{
+	logs("kino ", i < 0 ? "Aus" : kino[i].name);
+	send_code(i < 0 ? KINO_OFF : kino[i].code);
+	send_code(i < 0 ? KINO_OFF : kino[i].code);
+	running = i;
+}
+
+/* hard key: its scancode goes out; what it does is Home Assistant's business */
 static void hard_key(int scan)
 {
-	struct screen *s = &stack[depth];
-	int i, j, k;
-
-	for (i = 0; i < NKEYMAP; i++)
-		if (keymap[i].scan == scan)
-			break;
-	if (i == NKEYMAP)
-		return;
-	if (s->kind == S_DEVICE && nav.x == nav.target) {
-		struct device *d = &dev[s->index];
-		const char *names[2] = { keymap[i].name, NULL };
-		for (k = 0; k < (int)(sizeof(aliases) / sizeof(aliases[0])); k++)
-			if (seq(aliases[k].from, keymap[i].name))
-				names[1] = aliases[k].to;
-		for (k = 0; k < 2 && names[k]; k++)
-			for (j = 0; j < d->ncmd; j++) {
-				/* ActionId is <device>_<Command>_Hold */
-				const char *a = d->cmd[j].action + slen(d->id) + 1, *e = a;
-				int n = slen(names[k]);
-				while (*e && *e != '_')
-					e++;
-				if (e - a == n && find(a, e, names[k]) == a) {
-					send_event("SendIR", "ActionId", d->cmd[j].action);
-					set_status(d->cmd[j].label, C_ACCENT);
-					return;
-				}
-			}
-		set_status("Not on this device", C_TEXT2);
-		return;
-	}
-	if (running < 0) {
-		set_status("No activity", C_TEXT2);
-		return;
-	}
-	for (j = 0; j < act[running].nhard; j++)
-		if (seq(act[running].hard[j].name, keymap[i].name)) {
-			send_event("SendIR", "ActionId", act[running].hard[j].action);
-			set_status(keymap[i].name, C_ACCENT);
-			return;
-		}
-	set_status("Not assigned", C_TEXT2);
+	send_code(0x80 | scan);
 }
 
 static int repeats(int scan)
@@ -1616,8 +1808,8 @@ static void commit(int kind, int index)
 
 	sound_tick();
 	switch (kind) {
-	case T_ACT: start_activity(index); break;
-	case T_POWER: start_activity(power_off_index()); break;
+	case T_ACT: kino_select(index); break;
+	case T_POWER: kino_select(-1); break;
 	case T_BACK: pop_to(depth - 1); break;
 	case T_DEVICES: push(S_DEVICES, 0); break;
 	case T_SETTINGS: push(S_SETTINGS, 0); break;
@@ -1777,14 +1969,20 @@ static int touch(int x, int y, int down, int was_down)
 			return 0;
 		}
 		gesture = G_TAP;
-		/* in scrollable lists the press shows only if the finger stays */
-		press_t = scroll_max(s) > 0 && press_kind != T_POWER && press_kind != T_BACK ? now + TAP_DELAY : now;
+		/* in scrollable lists and on the pages the press shows only if the finger stays */
+		press_t = (scroll_max(s) > 0 || s->kind == S_HOME) && press_kind != T_POWER && press_kind != T_BACK ?
+			  now + TAP_DELAY : now;
 		return 0;
 	}
 	if (down) {					/* move */
 		if (gesture == G_TAP) {
-			int dy = y - g_y0;
-			if ((dy > SLOP || dy < -SLOP) && scroll_max(s) > 0) {
+			int dy = y - g_y0, dx = x - g_x0;
+			if (s->kind == S_HOME && (dx > SLOP || dx < -SLOP) && dx * dx > dy * dy) {
+				gesture = G_PAGE;
+				press_kind = T_NONE;
+				g_x0 = x;		/* start 1:1 from here, no jump */
+				g_p0 = pager.x;
+			} else if ((dy > SLOP || dy < -SLOP) && scroll_max(s) > 0) {
 				gesture = G_SCROLL;
 				press_kind = T_NONE;
 				g_y0 = y;		/* start 1:1 from here, no jump */
@@ -1811,6 +2009,14 @@ static int touch(int x, int y, int down, int was_down)
 			nav.v = 0;
 		} else if (gesture == G_SLIDER) {
 			slider_to(x);
+		} else if (gesture == G_PAGE) {
+			int p = (g_p0 >> 8) - (x - g_x0), mx = (NPAGE - 1) * PG_STEP;
+			if (p < 0)
+				p = rubber(p, gfx_w);
+			else if (p > mx)
+				p = mx + rubber(p - mx, gfx_w);
+			pager.x = p << 8;
+			pager.v = 0;
 		}
 		return 0;
 	}
@@ -1838,6 +2044,17 @@ static int touch(int x, int y, int down, int was_down)
 	} else if (gesture == G_SLIDER) {
 		post_num("/system/backlightlevel", set_brightness);	/* save */
 		sound_tick();
+	} else if (gesture == G_PAGE) {
+		/* the page where the swipe would come to rest, at most one from where it began */
+		int from = (g_p0 + (PG_STEP << 7)) / (PG_STEP << 8), rest = (pager.x >> 8) - vx / 2;
+		int to = rest < 0 ? 0 : (rest + PG_STEP / 2) / PG_STEP;
+		if (to > from + 1) to = from + 1;
+		if (to < from - 1) to = from - 1;
+		if (to >= NPAGE) to = NPAGE - 1;
+		if (to != from)
+			sound_tick();
+		pager.target = to * PG_STEP << 8;
+		pager.v = -vx * 256;
 	}
 	press_kind = T_NONE;
 	gesture = G_NONE;
@@ -1849,8 +2066,7 @@ int main(int argc, char **argv, char **envp)
 	unsigned ev[16];
 	gfi_group_t grp;
 	gfi_layer_t il;
-	const char *body;
-	int i, n, held = -1, held_ms = 0, touching = 0, quit = 0, dirty = 1, frames = 0;
+	int i, n, held = -1, held_ms = 0, touching = 0, quit = 0, dirty = 1, frames = 0, frame_max = 0;
 	long last_frame = 0, last_clock = 0, last_power = 0, last_sensor = 0, last_motion;
 
 	(void)argc; (void)argv; (void)envp;
@@ -1866,13 +2082,7 @@ int main(int argc, char **argv, char **envp)
 
 	logs("ohui v" VERSION " start", NULL);
 	now = now_ms();
-	body = http_get("/userconfig", cfg, sizeof(cfg), &n);
-	if (body && n > 0)
-		parse_config(body, n);
-	for (i = 0; i < nact; i++)
-		logs("activity ", act[i].label);
-	for (i = 0; i < ndev; i++)
-		logs("device ", dev[i].label);
+	curtain_init();
 	hao = tcp("1100");
 	logs(hao >= 0 ? "hao connected" : "hao NOT connected", NULL);
 	if (hao < 0)
@@ -1942,14 +2152,14 @@ int main(int argc, char **argv, char **envp)
 				night.target = 0;
 				apply_night(0);
 			}
-			if (key == SCAN_OFF && power_off_index() >= 0)
-				start_activity(power_off_index());
+			if (key == SCAN_OFF)
+				kino_select(-1);
 			else if (key == SCAN_ACTIVITIES)
 				pop_to(0);
 			else if (key == SCAN_UNDER_L)
 				pop_to(depth - 1);
-			else if (key == SCAN_UNDER_R && depth == 0 && running >= 0)
-				push(S_ACT, running);
+			else if (key == SCAN_UNDER_R)
+				;
 			else if (key == SCAN_SIDE_L)
 				page(-1);
 			else if (key == SCAN_SIDE_R)
@@ -1968,6 +2178,10 @@ int main(int argc, char **argv, char **envp)
 		/* 2. hao, clock, power */
 		if (hao_poll())
 			dirty = 1;
+		if (sent_t && now - sent_t >= 400) {	/* lamp goes out */
+			sent_t = 0;
+			dirty = 1;
+		}
 		if (now - last_clock > 15000) {
 			last_clock = now;
 			update_clock();
@@ -2003,6 +2217,8 @@ int main(int argc, char **argv, char **envp)
 			if (steps) {
 				if (gesture != G_EDGE && nav.x != nav.target)
 					spring_run(&nav, steps * 10);
+				if (gesture != G_PAGE && pager.x != pager.target)
+					spring_run(&pager, steps * 10);
 				if (seg_spring.x != seg_spring.target)
 					spring_run(&seg_spring, steps * 10);
 				if (sw_spring.x != sw_spring.target)
@@ -2012,7 +2228,7 @@ int main(int argc, char **argv, char **envp)
 				if (scroll_step(&stack[depth], steps))
 					moving = 1;
 			}
-			if (nav.x != nav.target || seg_spring.x != seg_spring.target ||
+			if (nav.x != nav.target || pager.x != pager.target || seg_spring.x != seg_spring.target ||
 			    sw_spring.x != sw_spring.target || night.x != night.target ||
 			    stack[depth].snapping || stack[depth].sv)
 				moving = 1;
@@ -2031,8 +2247,10 @@ int main(int argc, char **argv, char **envp)
 			long t0 = now_ms();
 			render();
 			dr_present(0, 0, gfx_w - 1, gfx_h - 1);
-			if (frames < 3)
-				lognum("frame ms ", (int)(now_ms() - t0));
+			if (frames < 3 || now_ms() - t0 > frame_max) {	/* the slowest frame so far */
+				frame_max = (int)(now_ms() - t0);
+				lognum("frame ms ", frame_max);
+			}
 			frames++;
 			last_frame = now;
 			dirty = 0;
