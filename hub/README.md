@@ -18,6 +18,15 @@ wait, Blu-ray power via IR, receiver input via 433 MHz ...).
   and the current activity, and an option chosen in Home Assistant (dashboard, automation, voice)
   switches the activity here. Create the helper once; without it the hub runs as before.
 
+- **Network remote for Samsung players and TVs** (Tizen, port 8001): the hub keeps one connection to the
+  device open and presses keys on it when Home Assistant fires the event `open_harmony_key` with
+  `device` (the id given in `PUT /api/players`) and `key`. Keys have plain names (`up`, `ok`, `back`,
+  `play`, `red`, `7`; the table `SAMSUNG_KEYS` in `app/hub.py` turns them into Samsung's codes) or are a
+  Samsung code as it is (`KEY_POWER`). Keys without a meaning on the device are dropped. The connection
+  is held because the device's remote service sleeps: the first connection wakes it and is dropped after
+  about 20 s, the next one is accepted (measured on a UBD-M9500; this is also why Home Assistant's own
+  integration shows such a device as off). After power-on it takes about half a minute.
+
 Runs in the Home Assistant sidebar ("Remote") through ingress and uses the
 Supervisor token for the HA API. Data in `/data/hub.json`.
 
@@ -39,7 +48,7 @@ API: `GET /api/state`, WebSocket `/api/events` (state, gateway, step,
 step_error, current, gw_event), `POST /api/gateways {url}`,
 `DELETE /api/gateways/<id>`, `POST /api/gateways/<id>/send`,
 `POST /api/gateways/<id>/commands {device,name,code}`,
-`PUT /api/activities`, `POST /api/switch {activity|null}`,
+`PUT /api/activities`, `PUT /api/players [{id,host}]`, `POST /api/switch {activity|null}`,
 `POST /api/step` (run one step), `GET /api/ha/entities`, `GET /api/ha/services`.
 
 Next: Harmony 900 configuration (activities and buttons pushed to the remote's ohui).

@@ -4,9 +4,12 @@ Runs as a Home Assistant add-on (ingress panel) or on any machine for
 development. It keeps the activities, talks to the IR/RF gateways over
 their REST API and WebSocket and calls Home Assistant services, so one
 activity can mix infrared, 433 MHz and anything Home Assistant controls.
+It also holds the network remote of Samsung players and TVs: Home Assistant
+fires the event `open_harmony_key` (device, key) and the hub presses that key.
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -38,6 +41,18 @@ OFF = "Aus"
 HA_WS = "ws://supervisor/core/websocket" if os.environ.get("SUPERVISOR_TOKEN") else \
     re.sub(r"^http", "ws", HA_URL) + "/websocket" if HA_URL else ""
 
+KEY_EVENT = "open_harmony_key"
+# What the keys of a remote are called here -> key codes of Samsung's network remote. KEY_... passes as it is.
+SAMSUNG_KEYS = {
+    "up": "KEY_UP", "down": "KEY_DOWN", "left": "KEY_LEFT", "right": "KEY_RIGHT", "ok": "KEY_ENTER",
+    "back": "KEY_RETURN", "exit": "KEY_EXIT", "menu": "KEY_HOME", "guide": "KEY_DISC_MENU", "info": "KEY_INFO",
+    "page_up": "KEY_TOOLS", "page_down": "KEY_SUB_TITLE",
+    "play": "KEY_PLAY", "pause": "KEY_PAUSE", "stop": "KEY_STOP", "rewind": "KEY_REWIND", "forward": "KEY_FF",
+    "replay": "KEY_REWIND_", "skip": "KEY_FF_", "record": "KEY_REC", "ch_up": "KEY_CHUP", "ch_down": "KEY_CHDOWN",
+    "red": "KEY_RED", "green": "KEY_GREEN", "yellow": "KEY_YELLOW", "blue": "KEY_CYAN",
+    "clear": "KEY_DELETE", "enter": "KEY_ENTER", **{str(n): f"KEY_{n}" for n in range(10)},
+}
+
 # Domains offered in the activity editor; everything else is noise there.
 HA_DOMAINS = {"media_player", "light", "switch", "remote", "scene", "script", "input_boolean", "cover", "fan", "climate", "button"}
 
@@ -48,7 +63,7 @@ def slug(s):
 
 class Store:
     def __init__(self):
-        self.data = {"gateways": [], "activities": [], "current": None}
+        self.data = {"gateways": [], "players": [], "activities": [], "current": None}
         if STORE.exists():
             self.data.update(json.loads(STORE.read_text()))
 
@@ -131,10 +146,54 @@ class Gateway:
         return {"device": dev["id"], "command": cid}
 
 
+class Samsung:
+    """Network remote of a Samsung player or TV (Tizen, port 8001).
+
+    Its remote service sleeps. The first connection wakes it and is dropped after about 20 s; one made right
+    after that is accepted and stays. So one connection is kept open for as long as the device is on.
+    """
+
+    def __init__(self, hub, cfg):
+        self.hub, self.id, self.host = hub, cfg["id"], cfg["host"]
+        self.ws = self.task = None
+
+    def view(self):
+        return {"id": self.id, "host": self.host, "online": self.ws is not None}
+
+    async def run(self):
+        url = f"ws://{self.host}:8001/api/v2/channels/samsung.remote.control?name=" + base64.b64encode(b"open-harmony").decode()
+        while True:
+            t0 = time.monotonic()
+            try:
+                async with self.hub.http.ws_connect(url, heartbeat=20) as ws:
+                    async for msg in ws:
+                        if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data).get("event") == "ms.channel.connect":
+                            self.ws = ws
+                            log.info("player %s: connected", self.id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # off (no route), asleep, switching off
+                log.debug("player %s: %s", self.id, e)
+            if self.ws:
+                log.info("player %s: connection lost", self.id)
+            self.ws = None
+            await asyncio.sleep(1 if time.monotonic() - t0 > 5 else 3)   # it was just woken: try again at once
+
+    async def key(self, key):
+        code = SAMSUNG_KEYS.get(key) or (key if str(key).startswith("KEY_") else None)
+        if not code:
+            return  # a key this device has no use for
+        if not self.ws:
+            raise RuntimeError("not connected (off, or still starting)")
+        await self.ws.send_json({"method": "ms.remote.control", "params": {
+            "Cmd": "Click", "DataOfCmd": code, "Option": "false", "TypeOfRemote": "SendRemoteKey"}})
+
+
 class Hub:
     def __init__(self):
         self.store = Store()
         self.gateways = {}
+        self.players = {}
         self.clients = set()
         self.runner = None  # (activity id, task)
         self.http = None
@@ -146,13 +205,14 @@ class Hub:
         self.http = aiohttp.ClientSession()
         for g in self.store.data["gateways"]:
             self.add_gateway(g)
+        self.set_players(self.store.data["players"])
         if HA_WS and HA_TOKEN and SELECT:
             self.select_task = asyncio.create_task(self.watch_select())
 
     async def stop(self, app):
         if self.select_task:
             self.select_task.cancel()
-        for g in self.gateways.values():
+        for g in [*self.gateways.values(), *self.players.values()]:
             g.task.cancel()
         await self.http.close()
 
@@ -161,6 +221,19 @@ class Hub:
         g.task = asyncio.create_task(g.run())
         self.gateways[g.id] = g
         return g
+
+    def set_players(self, cfgs):
+        for p in self.players.values():
+            p.task.cancel()
+        self.players = {c["id"]: Samsung(self, c) for c in cfgs}
+        for p in self.players.values():
+            p.task = asyncio.create_task(p.run())
+
+    async def player_key(self, device, key):
+        try:
+            await self.players[device].key(key)
+        except Exception as e:  # a key that got lost must not take the Home Assistant connection down
+            log.info("key %s for %s: %s", key, device, e)
 
     async def broadcast(self, msg):
         s = json.dumps(msg)
@@ -172,7 +245,8 @@ class Hub:
 
     def state(self):
         d = self.store.data
-        return {"gateways": [g.view() for g in self.gateways.values()], "activities": d["activities"],
+        return {"gateways": [g.view() for g in self.gateways.values()],
+                "players": [p.view() for p in self.players.values()], "activities": d["activities"],
                 "current": d["current"], "running": self.runner[0] if self.runner else None,
                 "ha": bool(HA_URL and HA_TOKEN)}
 
@@ -203,7 +277,7 @@ class Hub:
             log.info("select %s: %s", SELECT, e)
 
     async def watch_select(self):
-        """Follow the helper: an option chosen in Home Assistant switches the activity."""
+        """Follow Home Assistant: an option chosen in the helper switches the activity, a key event presses a key."""
         while True:
             try:
                 async with self.http.ws_connect(HA_WS, heartbeat=30) as ws:
@@ -213,12 +287,17 @@ class Hub:
                         raise RuntimeError("Home Assistant refused the token")
                     await ws.send_json({"id": 1, "type": "subscribe_trigger",
                                         "trigger": {"platform": "state", "entity_id": SELECT}})
+                    await ws.send_json({"id": 2, "type": "subscribe_events", "event_type": KEY_EVENT})
                     await self.sync_select()
                     async for msg in ws:
                         if msg.type != aiohttp.WSMsgType.TEXT:
                             continue
                         ev = json.loads(msg.data)
                         if ev.get("type") != "event":
+                            continue
+                        if ev["id"] == 2:
+                            data = ev["event"].get("data") or {}
+                            await self.player_key(data.get("device"), data.get("key"))
                             continue
                         option = ev["event"]["variables"]["trigger"]["to_state"]["state"]
                         target = next((a["id"] for a in self.store.data["activities"] if a["name"] == option), None)
@@ -360,6 +439,18 @@ async def gw_save_command(req):
     res = await g.save_command(body["device"], body["name"], body["code"])
     await hub.broadcast({"type": "gateway", "gateway": g.view()})
     return web.json_response(res)
+
+
+@routes.put("/api/players")
+async def put_players(req):
+    """Network devices the hub presses keys on: [{"id": "bluray", "host": "192.168.1.20"}] (Samsung only so far)."""
+    cfgs = [{"id": slug(p["id"]), "host": p["host"].strip()} for p in await req.json()]
+    if not all(re.fullmatch(r"[A-Za-z0-9.-]+", c["host"]) for c in cfgs):
+        raise web.HTTPBadRequest(text="host: a name or an address")
+    hub.store.data["players"] = cfgs
+    hub.store.save()
+    hub.set_players(cfgs)
+    return web.json_response(cfgs)
 
 
 @routes.put("/api/activities")
