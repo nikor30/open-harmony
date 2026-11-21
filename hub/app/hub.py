@@ -149,10 +149,10 @@ class Gateway:
 class Samsung:
     """Network remote of a Samsung player or TV (Tizen, port 8001).
 
-    One connection is kept open for as long as the device is on, so a key goes out at once. The device has to
-    allow this computer first: it asks on its screen at the first attempt (the attempt hangs until someone
-    answers or half a minute has passed), and it closes the connection of a computer it does not allow with
-    the reason "notack". Allowed devices are listed in its settings (Device Connection Manager).
+    One connection is kept open for as long as the device is on, so a key goes out at once. A device that does
+    not let this computer in closes the connection with the reason "notack", at once or after up to half a
+    minute. On a UBD-M9500 in Developer Mode only the developer's computer got in; whether that is the mode
+    or a permission nobody gave on its screen (Device Connection Manager) is not known yet.
     """
 
     def __init__(self, hub, cfg):
