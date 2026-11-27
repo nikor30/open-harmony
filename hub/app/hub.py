@@ -316,10 +316,12 @@ class Hub:
                     await ws.send_json({"type": "auth", "access_token": HA_TOKEN})
                     if (await ws.receive_json()).get("type") != "auth_ok":
                         raise RuntimeError("Home Assistant refused the token")
+                    # Sync before subscribing: set_options resets the helper to its first option, and that echo
+                    # used to arrive as a user choice (Aus, then the old activity again) and switched the cinema on.
+                    await self.sync_select()
                     await ws.send_json({"id": 1, "type": "subscribe_trigger",
                                         "trigger": {"platform": "state", "entity_id": SELECT}})
                     await ws.send_json({"id": 2, "type": "subscribe_events", "event_type": KEY_EVENT})
-                    await self.sync_select()
                     async for msg in ws:
                         if msg.type != aiohttp.WSMsgType.TEXT:
                             continue
